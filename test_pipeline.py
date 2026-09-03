@@ -13,6 +13,8 @@ import db
 from classifier import is_unwanted_role, classify_track, classify_domain
 from fetch_github import parse_markdown_table
 from scout import row_to_payload
+import matcher
+import sync_profile
 
 
 # --------------------------------------------------------------------------- #
@@ -283,3 +285,187 @@ def test_prep_endpoint_persists(client):
 
 def test_prep_missing_job(client):
     assert client.post("/api/jobs/ghost/prep").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Match scoring engine (matcher.py)
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def sample_profile():
+    return {
+        "languages": {"python": 1.0, "java": 1.0, "c++": 0.6},
+        "frameworks": {"fastapi": 0.9, "spring": 0.8},
+        "skills": {"backend": 0.9, "systems": 0.8, "machine": 0.7, "learning": 0.7},
+        "keywords": {"software": 0.8, "engineer": 0.6, "swe": 0.7, "ml": 0.7, "ai": 0.7},
+        "score_saturation": 4.0,
+    }
+
+
+def test_match_score_is_deterministic(sample_profile):
+    job = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
+    first = matcher.match_score(job, sample_profile)
+    for _ in range(25):
+        assert matcher.match_score(job, sample_profile) == first
+
+
+def test_match_score_bounds(sample_profile):
+    jobs = [
+        {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"},
+        {"title": "Barista", "track": "full_time", "domain": "General"},
+        {"title": "", "track": "", "domain": ""},
+    ]
+    for job in jobs:
+        s = matcher.match_score(job, sample_profile)
+        assert isinstance(s, int)
+        assert 0 <= s <= 100
+
+
+def test_match_score_edge_cases(sample_profile):
+    # Empty / None jobs and no-overlap jobs score 0.
+    assert matcher.match_score({}, sample_profile) == 0
+    assert matcher.match_score(None, sample_profile) == 0
+    assert matcher.match_score(
+        {"title": "Barista", "track": "full_time", "domain": "General"}, sample_profile
+    ) == 0
+
+
+def test_match_score_relevant_beats_irrelevant(sample_profile):
+    relevant = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
+    irrelevant = {"title": "Store Clerk", "track": "full_time", "domain": "General"}
+    assert matcher.match_score(relevant, sample_profile) > matcher.match_score(irrelevant, sample_profile)
+
+
+def test_match_score_saturates_at_100(sample_profile):
+    # A title dense with high-weight terms cannot exceed 100.
+    job = {
+        "title": "Python Java Backend Software Engineer FastAPI Systems",
+        "track": "full_time",
+        "domain": "SWE",
+    }
+    assert matcher.match_score(job, sample_profile) == 100
+
+
+def test_match_score_scales_with_saturation(sample_profile):
+    job = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
+    easy = dict(sample_profile, score_saturation=1.0)
+    hard = dict(sample_profile, score_saturation=20.0)
+    assert matcher.match_score(job, easy) >= matcher.match_score(job, hard)
+
+
+def test_match_score_multiword_and_symbol_terms():
+    profile = {
+        "languages": {"c++": 1.0},
+        "frameworks": {},
+        "skills": {"machine learning": 1.0},
+        "keywords": {},
+        "score_saturation": 2.0,
+    }
+    job = {"title": "C++ Machine Learning Engineer", "track": "full_time", "domain": "AI/ML"}
+    assert matcher.match_score(job, profile) == 100
+    # A plain 'c' should not match the 'c++' term.
+    assert matcher.match_score({"title": "C developer"}, profile) == 0
+
+
+def test_flatten_terms_takes_max_weight_and_skips_bad():
+    profile = {
+        "languages": {"python": 0.5},
+        "skills": {"python": 0.9, "": 1.0, "bad": "notanumber", "zero": 0},
+        "frameworks": {},
+        "keywords": {},
+    }
+    terms = matcher.flatten_terms(profile)
+    assert terms["python"] == 0.9        # higher weight wins
+    assert "" not in terms and "bad" not in terms and "zero" not in terms
+
+
+def test_load_profile_missing_returns_default(tmp_path):
+    prof = matcher.load_profile(tmp_path / "nope.json")
+    assert matcher.match_score(
+        {"title": "Python Backend Engineer", "track": "full_time", "domain": "SWE"}, prof
+    ) > 0
+
+
+def test_shipped_profile_json_scores_reasonably():
+    prof = matcher.load_profile()  # real profile.json
+    strong = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
+    weak = {"title": "Store Clerk", "track": "full_time", "domain": "General"}
+    assert matcher.match_score(strong, prof) >= 70
+    assert matcher.match_score(weak, prof) == 0
+
+
+def test_explain_reports_matched_terms(sample_profile):
+    job = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
+    info = matcher.explain(job, sample_profile)
+    assert info["score"] == matcher.match_score(job, sample_profile)
+    assert "backend" in info["matched_terms"]
+    assert info["matched_weight"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# API integration: Inbox sorts by match score descending
+# --------------------------------------------------------------------------- #
+def test_api_attaches_match_score(client):
+    jobs = client.get("/api/jobs?status=new").json()
+    assert all("match_score" in j for j in jobs)
+    assert all(0 <= j["match_score"] <= 100 for j in jobs)
+
+
+def test_api_sorts_by_match_score_desc(client):
+    jobs = client.get("/api/jobs?status=new").json()
+    scores = [j["match_score"] for j in jobs]
+    assert scores == sorted(scores, reverse=True)
+
+
+# --------------------------------------------------------------------------- #
+# Resume / GitHub profile sync (sync_profile.py) — offline paths only
+# --------------------------------------------------------------------------- #
+def test_scan_text_for_tech_is_deterministic():
+    text = "Built backend services in Python and Java using FastAPI and Spring. "
+    a = sync_profile.scan_text_for_tech(text)
+    b = sync_profile.scan_text_for_tech(text)
+    assert a == b
+    assert "python" in a["languages"] and "java" in a["languages"]
+    assert "fastapi" in a["frameworks"] and "spring" in a["frameworks"]
+    assert "backend" in a["skills"]
+    for section in a.values():
+        for w in section.values():
+            assert 0.0 < w <= 1.0
+
+
+def test_scan_text_multiword_skill():
+    result = sync_profile.scan_text_for_tech("Experience with machine learning pipelines.")
+    assert "machine learning" in result["skills"]
+
+
+def test_merge_sections_keeps_higher_weight():
+    base = {"languages": {"python": 0.5}, "frameworks": {}, "skills": {}, "keywords": {}}
+    merged = sync_profile.merge_sections(base, {"languages": {"python": 0.9, "java": 0.4}})
+    assert merged["languages"]["python"] == 0.9
+    assert merged["languages"]["java"] == 0.4
+    # Base is not mutated in place.
+    assert base["languages"] == {"python": 0.5}
+
+
+def test_build_profile_from_resume(tmp_path):
+    resume = tmp_path / "resume.md"
+    resume.write_text("# Resume\nPython and Java backend engineer. FastAPI, Spring, systems.")
+    out = tmp_path / "profile.json"
+    profile = sync_profile.build_profile(resume=str(resume), profile_path=out)
+    assert "python" in profile["languages"]
+    assert "java" in profile["languages"]
+    sync_profile.save_profile(profile, out)
+    assert out.exists()
+    # The generated profile scores a matching job above zero.
+    assert matcher.match_score(
+        {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}, profile
+    ) > 0
+
+
+def test_build_profile_requires_a_source():
+    with pytest.raises(ValueError):
+        sync_profile.build_profile()
+
+
+def test_extract_text_missing_file():
+    with pytest.raises(FileNotFoundError):
+        sync_profile.extract_text_from_resume("/no/such/resume.md")
