@@ -81,6 +81,16 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_track_status ON jobs(track, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON jobs(domain)")
 
+def all_job_ids() -> set:
+    """Return the set of every job id currently stored.
+
+    Used by the background worker to snapshot state before/after a run so it can
+    count only the genuinely new roles inserted during that specific run.
+    """
+    with get_connection() as conn:
+        return {row[0] for row in conn.execute("SELECT id FROM jobs").fetchall()}
+
+
 def generate_job_id(company: str, title: str) -> str:
     """Dedup primarily on normalized company + normalized title."""
     clean_company = re_clean(company)

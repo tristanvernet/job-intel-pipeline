@@ -1,0 +1,8 @@
+{
+  "schedule": "weekly",
+  "weekday": "monday",
+  "hour": 9,
+  "minute": 0,
+  "interval_hours": 6,
+  "notify": true
+}
