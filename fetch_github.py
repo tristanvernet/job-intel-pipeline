@@ -74,38 +74,67 @@ def _extract_url(*cells: str) -> str:
     return ""
 
 
-def parse_markdown_table(content: str, default_track: str, term_hint: str):
+# Matches an HTML table row and its cells (SimplifyJobs' current format).
+_TR_PATTERN = re.compile(r"<tr>(.*?)</tr>", re.DOTALL | re.IGNORECASE)
+_TD_PATTERN = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_cell_rows(content: str):
+    """Yield 4-cell rows (company, role, location, application) from a README.
+
+    Supports BOTH the current HTML `<tr><td>` tables and legacy Markdown pipe
+    tables, so a format change on either side never silently drops every role.
+    """
+    rows = []
+    # HTML tables (header rows use <th> and are naturally excluded).
+    for tr in _TR_PATTERN.findall(content):
+        cells = _TD_PATTERN.findall(tr)
+        if len(cells) >= 4:
+            rows.append([c.strip() for c in cells[:4]])
+    # Legacy Markdown pipe tables.
+    for line in content.splitlines():
+        line = line.rstrip()
+        if not line.startswith("|"):
+            continue
+        parts = [p.strip() for p in line.split("|")[1:-1]]
+        if len(parts) >= 4:
+            rows.append(parts[:4])
+    return rows
+
+
+def parse_markdown_table(content: str, default_track: str, term_hint: str, stats: dict = None):
     """Parse SimplifyJobs-style Markdown tables into (payloads, skipped).
 
     Pure function: no network, no DB writes. Handles emojis, sponsorship
     markers, `<a href>` apply buttons, markdown links, and `↳` sub-listings
     that inherit the company name from the row above.
+
+    If a mutable `stats` dict is provided, it is populated with a breakdown of
+    total data rows seen and skip reasons, so callers can print an audit.
     """
     payloads = []
-    skipped = 0
     last_company = ""
+    total_rows = 0
+    reasons = {
+        "closed_locked": 0,
+        "missing_fields": 0,
+        "excluded_level_or_discipline": 0,
+        "unknown_domain": 0,
+    }
 
-    for line in content.splitlines():
-        line = line.rstrip()
-        if not line.startswith("|"):
-            continue
-
-        parts = [p.strip() for p in line.split("|")[1:-1]]
-        if len(parts) < 4:
-            continue
-
-        company_raw, role_raw, location_raw, link_raw = parts[0], parts[1], parts[2], parts[3]
-
-        # Skip header and separator rows
+    for company_raw, role_raw, location_raw, link_raw in _extract_cell_rows(content):
+        # Skip header and separator rows (not counted as data rows)
         joined = f"{company_raw}{role_raw}".lower()
         if "company" in joined and "role" in joined:
             continue
-        if set(company_raw) <= set("-: "):
+        if company_raw and set(company_raw) <= set("-: "):
             continue
+
+        total_rows += 1
 
         # Skip closed/locked roles entirely
         if any(m in role_raw or m in link_raw for m in _CLOSED_MARKERS):
-            skipped += 1
+            reasons["closed_locked"] += 1
             continue
 
         company = _clean_text(company_raw)
@@ -120,18 +149,18 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str):
         job_url = _extract_url(link_raw, role_raw)
 
         if not title or not job_url or not company:
-            skipped += 1
+            reasons["missing_fields"] += 1
             continue
 
         # Gate 1: excluded levels / non-SWE disciplines
         if is_unwanted_role(title):
-            skipped += 1
+            reasons["excluded_level_or_discipline"] += 1
             continue
 
-        # Gate 2: must map to a known domain
+        # Gate 2: must map to a known domain (technical roles default to SWE)
         domain = classify_domain(title)
         if not domain:
-            skipped += 1
+            reasons["unknown_domain"] += 1
             continue
 
         # Classification (fall back to source defaults when unclear)
@@ -154,6 +183,13 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str):
             }
         )
 
+    skipped = sum(reasons.values())
+    if stats is not None:
+        stats["total_rows"] = total_rows
+        stats["kept"] = len(payloads)
+        stats["skipped"] = skipped
+        stats["reasons"] = reasons
+
     return payloads, skipped
 
 
@@ -174,12 +210,21 @@ def run_github_fetch():
             print(f"    -> HTTP {resp.status_code} (repo may use a different branch/path)")
             continue
 
+        stats = {}
         payloads, skipped = parse_markdown_table(
-            resp.text, src["default_track"], src["term_hint"]
+            resp.text, src["default_track"], src["term_hint"], stats=stats
         )
         added = sum(1 for p in payloads if insert_job(p))
         dupes = len(payloads) - added
-        print(f"    -> Added {added} jobs | Skipped {skipped} | Duplicate {dupes}")
+        r = stats.get("reasons", {})
+        print(f"    -> Rows found in README : {stats.get('total_rows', 0)}")
+        print(f"    -> Inserted (new)       : {added}")
+        print(f"    -> Duplicates (existing): {dupes}")
+        print(f"    -> Skipped              : {skipped}")
+        print(f"         closed/locked           : {r.get('closed_locked', 0)}")
+        print(f"         missing company/url     : {r.get('missing_fields', 0)}")
+        print(f"         excluded level/discipline: {r.get('excluded_level_or_discipline', 0)}")
+        print(f"         unknown domain          : {r.get('unknown_domain', 0)}")
         total_new += added
         total_skipped += skipped
 

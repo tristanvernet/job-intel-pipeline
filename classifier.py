@@ -44,7 +44,10 @@ def classify_track(title: str, description: str = "") -> Tuple[str, Optional[str
     # 2. Full-Time Entry Level Detection
     entry_signals = [
         "junior", "jr", "entry level", "associate", "new grad",
-        "university graduate", "swe i", "software engineer i", "level 1", "rotational"
+        "university graduate", "swe i", "software engineer i", "level 1", "rotational",
+        # Broadened early-career / generalist titles
+        "technology analyst", "sde", "software development engineer", "developer",
+        "technical specialist", "graduate", "apprentice", "early career", "campus"
     ]
     if any(k in title_lower for k in entry_signals):
         return "full_time", "New Grad / Entry Level"
@@ -54,12 +57,25 @@ def classify_track(title: str, description: str = "") -> Tuple[str, Optional[str
 
     return "unclear", None
 
+# Any of these tokens marks a role as "technical" and therefore SWE-eligible
+# when it doesn't strictly land in AI/ML or Systems. Kept broad on purpose so
+# we stop silently dropping legitimate engineering roles.
+_TECHNICAL_SWE_TOKENS = [
+    "software", "backend", "back end", "full stack", "fullstack", "frontend",
+    "front end", "developer", "swe", "sde", "web engineer", "application",
+    "programmer", "engineer", "engineering", "technology analyst",
+    "technical specialist", "technical analyst", "coding", "computer",
+    "it analyst", "solutions engineer", "technical program",
+]
+
+
 def classify_domain(title: str) -> Optional[str]:
     t = title.lower()
     if any(k in t for k in ["ai", "machine learning", "ml", "nlp", "computer vision", "llm", "deep learning"]):
         return "AI/ML"
     if any(k in t for k in ["embedded", "systems engineer", "infrastructure", "platform engineer", "kernel", "operating system", "devops", "sre"]):
         return "Systems"
-    if any(k in t for k in ["software", "backend", "full stack", "frontend", "developer", "swe", "web engineer", "application"]):
+    # Default any remaining technical role to SWE rather than dropping it.
+    if any(k in t for k in _TECHNICAL_SWE_TOKENS):
         return "SWE"
     return None

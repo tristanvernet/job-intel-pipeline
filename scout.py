@@ -1,9 +1,15 @@
+import random
+import time
+
 from jobspy import scrape_jobs
 from db import insert_job
 from classifier import is_unwanted_role, classify_track, classify_domain
 
-# Boards to scrape via jobspy.
+# Primary boards that tolerate steady scraping.
 SITES = ["indeed", "glassdoor", "zip_recruiter"]
+# LinkedIn is aggressive about rate limits, so it is fetched separately with a
+# smaller cap and random back-off, and isolated in try/except.
+LINKEDIN_LIMIT = 15
 
 # Expanded query variations across tracks and domains.
 SEARCH_QUERIES = [
@@ -75,14 +81,32 @@ def row_to_payload(row: dict, default_track: str = "unclear"):
     }
 
 
+def _ingest(jobs_df, default_track: str, counters: dict):
+    """Convert and insert a jobspy result frame; update shared counters."""
+    if jobs_df is None or jobs_df.empty:
+        return
+    for _, row in jobs_df.iterrows():
+        payload = row_to_payload(row.to_dict(), default_track)
+        if payload is None:
+            counters["skipped"] += 1
+            continue
+        if insert_job(payload):
+            print(f"  + Added: [{payload['track'].upper()}] [{payload['domain']}] "
+                  f"{payload['company']} - {payload['title']} ({payload['source']})")
+            counters["added"] += 1
+        else:
+            counters["duplicates"] += 1
+
+
 def run_scout(results_per_query: int = 10):
-    total_added = 0
-    total_skipped = 0
-    total_duplicates = 0
+    counters = {"added": 0, "skipped": 0, "duplicates": 0}
 
     for item in SEARCH_QUERIES:
         query = item["query"]
+        default_track = item["default_track"]
         print(f"\n[Scout] Searching: {query}...")
+
+        # Primary boards (Indeed / Glassdoor / ZipRecruiter)
         try:
             jobs_df = scrape_jobs(
                 site_name=SITES,
@@ -92,29 +116,31 @@ def run_scout(results_per_query: int = 10):
                 hours_old=72,
                 country_indeed="USA",
             )
+            _ingest(jobs_df, default_track, counters)
         except Exception as e:
-            print(f"  Error querying {query}: {e}")
-            continue
+            print(f"  Error querying primary boards for {query}: {e}")
 
-        if jobs_df is None or jobs_df.empty:
-            print(f"  No results found for {query}")
-            continue
+        # LinkedIn, isolated so a block here never stops the other boards.
+        try:
+            time.sleep(random.uniform(2.0, 5.0))  # polite jitter before LinkedIn
+            li_df = scrape_jobs(
+                site_name=["linkedin"],
+                search_term=query,
+                location="United States",
+                results_wanted=LINKEDIN_LIMIT,
+                hours_old=168,
+                linkedin_fetch_description=False,
+            )
+            _ingest(li_df, default_track, counters)
+        except Exception as e:
+            print(f"  [LinkedIn] skipped for '{query}' (likely rate-limited): {e}")
 
-        for _, row in jobs_df.iterrows():
-            payload = row_to_payload(row.to_dict(), item["default_track"])
-            if payload is None:
-                total_skipped += 1
-                continue
-            if insert_job(payload):
-                print(f"  + Added: [{payload['track'].upper()}] [{payload['domain']}] "
-                      f"{payload['company']} - {payload['title']}")
-                total_added += 1
-            else:
-                total_duplicates += 1
+        # Random delay between queries to avoid tripping rate limits.
+        time.sleep(random.uniform(1.0, 3.0))
 
     print("\n==========================================")
-    print(f"Scout Complete: {total_added} added | {total_skipped} filtered out | "
-          f"{total_duplicates} duplicates.")
+    print(f"Scout Complete: {counters['added']} added | {counters['skipped']} filtered out | "
+          f"{counters['duplicates']} duplicates.")
     print("==========================================")
 
 
