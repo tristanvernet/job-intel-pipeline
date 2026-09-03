@@ -3,6 +3,7 @@
 Usage:
     python sync_profile.py --resume path/to/resume.md
     python sync_profile.py --resume path/to/resume.pdf
+    python sync_profile.py --resume path/to/resume.docx
     python sync_profile.py --github octocat
     python sync_profile.py --resume resume.txt --github octocat   # merge both
 
@@ -13,6 +14,8 @@ weights are derived from real byte counts across the user's public repos.
 Design notes:
   * Text/Markdown resumes are read directly. PDF support is optional and only
     used if `pypdf` (or `PyPDF2`) is installed; otherwise a clear error is shown.
+  * .docx resumes are extracted with `python-docx` when installed; otherwise a
+    clear install hint is shown.
   * Network calls are isolated and fail loudly-but-gracefully (no silent except).
   * Existing hand-tuned weights in profile.json are preserved unless a newly
     detected weight is higher, so re-syncing never clobbers manual tuning.
@@ -68,7 +71,11 @@ _DEFAULT_SATURATION = 4.0
 # Resume text extraction
 # --------------------------------------------------------------------------- #
 def extract_text_from_resume(path: str | Path) -> str:
-    """Return the plain text of a resume (.txt/.md read directly, .pdf via pypdf)."""
+    """Return the plain text of a resume.
+
+    .pdf is parsed via pypdf, .docx via python-docx, and everything else
+    (.txt/.md/.markdown/no extension) is read directly as UTF-8 text.
+    """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Resume not found: {p}")
@@ -76,6 +83,8 @@ def extract_text_from_resume(path: str | Path) -> str:
     suffix = p.suffix.lower()
     if suffix == ".pdf":
         return _extract_pdf_text(p)
+    if suffix == ".docx":
+        return _extract_docx_text(p)
     # Treat everything else (.txt, .md, .markdown, no extension) as text.
     return p.read_text(encoding="utf-8", errors="replace")
 
@@ -94,6 +103,25 @@ def _extract_pdf_text(path: Path) -> str:
 
     reader = PdfReader(str(path))
     return "\n".join((page.extract_text() or "") for page in reader.pages)
+
+
+def _extract_docx_text(path: Path) -> str:
+    try:
+        from docx import Document  # type: ignore  # provided by python-docx
+    except ImportError as exc:
+        raise RuntimeError(
+            "DOCX support requires the 'python-docx' package. Install it with "
+            "`pip install python-docx`, or convert the resume to .txt/.md first."
+        ) from exc
+
+    document = Document(str(path))
+    parts = [para.text for para in document.paragraphs]
+    # Include text inside tables, which python-docx keeps separate from paragraphs.
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                parts.append(cell.text)
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -260,7 +288,7 @@ def build_profile(
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Populate/update profile.json.")
-    parser.add_argument("--resume", help="Path to a resume (.txt/.md/.pdf).")
+    parser.add_argument("--resume", help="Path to a resume (.txt/.md/.pdf/.docx).")
     parser.add_argument("--github", help="GitHub username to derive tech weights from.")
     parser.add_argument(
         "--out", default=str(PROFILE_PATH), help="Output profile path (default: profile.json)."
