@@ -4,3 +4,4 @@ __pycache__/
 jobs.db
 *.csv
 .pytest_cache/
+logs/
