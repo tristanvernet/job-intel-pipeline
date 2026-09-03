@@ -10,29 +10,74 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
+# Canonical status values. `new` surfaces in the Inbox tab.
+VALID_STATUSES = ("new", "applied", "saved", "archived")
+
+_CREATE_JOBS_SQL = """
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    company TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    location TEXT,
+    is_remote INTEGER DEFAULT 0,
+    track TEXT CHECK(track IN ('full_time', 'internship', 'unclear')) NOT NULL,
+    term TEXT,
+    domain TEXT CHECK(domain IN ('SWE', 'Systems', 'AI/ML', 'General')),
+    source TEXT,
+    date_posted TEXT,
+    date_discovered TEXT DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'new' CHECK(status IN ('new', 'applied', 'saved', 'archived')),
+    raw_description TEXT,
+    summary TEXT,
+    tailored_bullets TEXT,
+    outreach_note TEXT
+)
+"""
+
+
+def _status_check_present(conn: sqlite3.Connection) -> bool:
+    """True if the current jobs table already constrains status via CHECK."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone()
+    if not row or not row[0]:
+        return False
+    schema = row[0].lower().replace(" ", "")
+    return "check(statusin(" in schema
+
+
+def _migrate_status_check(conn: sqlite3.Connection):
+    """Additive, safe rebuild adding the status CHECK constraint.
+
+    Existing rows are preserved. Any legacy status not in VALID_STATUSES is
+    normalized to 'new' so the new constraint never rejects live data.
+    """
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone()
+    if not table_exists or _status_check_present(conn):
+        return
+
+    placeholders = ",".join("?" for _ in VALID_STATUSES)
+    conn.execute(
+        f"UPDATE jobs SET status='new' WHERE status IS NULL OR status NOT IN ({placeholders})",
+        VALID_STATUSES,
+    )
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+    col_list = ", ".join(cols)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("ALTER TABLE jobs RENAME TO jobs_legacy")
+    conn.execute(_CREATE_JOBS_SQL)
+    conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM jobs_legacy")
+    conn.execute("DROP TABLE jobs_legacy")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
 def init_db():
     with get_connection() as conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            company TEXT NOT NULL,
-            title TEXT NOT NULL,
-            url TEXT NOT NULL,
-            location TEXT,
-            is_remote INTEGER DEFAULT 0,
-            track TEXT CHECK(track IN ('full_time', 'internship', 'unclear')) NOT NULL,
-            term TEXT,
-            domain TEXT CHECK(domain IN ('SWE', 'Systems', 'AI/ML', 'General')),
-            source TEXT,
-            date_posted TEXT,
-            date_discovered TEXT DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'new',
-            raw_description TEXT,
-            summary TEXT,
-            tailored_bullets TEXT,
-            outreach_note TEXT
-        )
-        """)
+        conn.execute(_CREATE_JOBS_SQL)
+        _migrate_status_check(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_track_status ON jobs(track, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON jobs(domain)")
 
