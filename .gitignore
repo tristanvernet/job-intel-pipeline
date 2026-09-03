@@ -5,3 +5,4 @@ jobs.db
 *.csv
 .pytest_cache/
 logs/
+resume.txt
