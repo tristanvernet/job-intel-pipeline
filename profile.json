@@ -1,0 +1,49 @@
+{
+  "name": "Candidate Profile",
+  "description": "Deterministic match-scoring profile. Weights are 0..1 relevance scores per term. Edit by hand or regenerate with sync_profile.py.",
+  "languages": {
+    "python": 1.0,
+    "java": 1.0,
+    "c++": 0.6,
+    "typescript": 0.5,
+    "javascript": 0.5,
+    "go": 0.4,
+    "sql": 0.4
+  },
+  "frameworks": {
+    "fastapi": 0.9,
+    "spring": 0.8,
+    "django": 0.7,
+    "flask": 0.7,
+    "react": 0.6,
+    "node": 0.5,
+    "pytorch": 0.6,
+    "tensorflow": 0.5
+  },
+  "skills": {
+    "backend": 0.9,
+    "systems": 0.8,
+    "distributed": 0.8,
+    "infrastructure": 0.7,
+    "api": 0.7,
+    "database": 0.6,
+    "testing": 0.6,
+    "cloud": 0.6,
+    "devops": 0.6,
+    "machine": 0.7,
+    "learning": 0.7
+  },
+  "keywords": {
+    "software": 0.8,
+    "engineer": 0.6,
+    "developer": 0.6,
+    "swe": 0.7,
+    "sde": 0.6,
+    "ai": 0.7,
+    "ml": 0.7,
+    "platform": 0.6,
+    "embedded": 0.6,
+    "intern": 0.4
+  },
+  "score_saturation": 4.0
+}
