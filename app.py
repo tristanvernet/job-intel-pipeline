@@ -78,12 +78,47 @@ def stats():
         }
 
 
+@app.get("/api/analytics")
+def analytics():
+    """Application funnel: total counts per pipeline stage plus recent momentum.
+
+    `inbox` maps to the internal `new` status. `applied_last_7_days` counts
+    roles whose applied_at timestamp falls within the trailing 7 days.
+    """
+    with get_db() as conn:
+        def count(where="", args=()):
+            return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
+
+        applied_last_7_days = conn.execute(
+            "SELECT COUNT(*) FROM jobs "
+            "WHERE status = 'applied' "
+            "AND applied_at IS NOT NULL "
+            "AND applied_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        return {
+            "inbox": count(" WHERE status = ?", ("new",)),
+            "applied": count(" WHERE status = ?", ("applied",)),
+            "saved": count(" WHERE status = ?", ("saved",)),
+            "archived": count(" WHERE status = ?", ("archived",)),
+            "applied_last_7_days": applied_last_7_days,
+        }
+
+
 @app.post("/api/jobs/{job_id}/status")
 def update_status(job_id: str, payload: StatusUpdate):
     if payload.status not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {payload.status}")
     with get_db() as conn:
-        cur = conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (payload.status, job_id))
+        if payload.status == "applied":
+            cur = conn.execute(
+                "UPDATE jobs SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (payload.status, job_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE jobs SET status = ? WHERE id = ?", (payload.status, job_id)
+            )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job_id": job_id, "status": payload.status}
@@ -152,6 +187,15 @@ _INDEX_HTML = """
       </div>
     </header>
 
+    <!-- Application funnel -->
+    <section class="mb-5">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Application Funnel</h2>
+        <span id="funnel-momentum" class="text-[11px] text-zinc-500"></span>
+      </div>
+      <div id="funnel" class="grid grid-cols-2 sm:grid-cols-5 gap-2.5"></div>
+    </section>
+
     <!-- Metrics bar -->
     <div id="metrics" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 mb-5"></div>
 
@@ -215,6 +259,27 @@ _INDEX_HTML = """
         <div class="text-lg font-semibold ${accent||'text-white'} leading-none">${value}</div>
         <div class="text-[11px] uppercase tracking-wide text-zinc-500 mt-1.5">${label}</div>
       </div>`;
+    }
+
+    function funnelCard(label, value, accent, ring) {
+      return `<div class="bg-zinc-900/60 border ${ring||'border-zinc-800'} rounded-xl px-3.5 py-3">
+        <div class="text-2xl font-bold ${accent||'text-white'} leading-none">${value}</div>
+        <div class="text-[11px] uppercase tracking-wide text-zinc-500 mt-2">${label}</div>
+      </div>`;
+    }
+
+    async function loadAnalytics() {
+      const a = await (await fetch('/api/analytics')).json();
+      document.getElementById('funnel').innerHTML =
+        funnelCard('Inbox', a.inbox, 'text-white') +
+        funnelCard('Applied', a.applied, 'text-teal-400', 'border-teal-500/30') +
+        funnelCard('Saved', a.saved, 'text-amber-400', 'border-amber-500/30') +
+        funnelCard('Archived', a.archived, 'text-zinc-400') +
+        funnelCard('Applied · 7d', a.applied_last_7_days, 'text-indigo-400', 'border-indigo-500/30');
+      const m = document.getElementById('funnel-momentum');
+      m.textContent = a.applied_last_7_days > 0
+        ? `\u2191 ${a.applied_last_7_days} applied in the last 7 days`
+        : 'No applications in the last 7 days';
     }
 
     async function loadStats() {
@@ -296,6 +361,7 @@ _INDEX_HTML = """
       state.cursor = 0;
       render();
       loadStats();
+      loadAnalytics();
     }
 
     async function setStatus(jobId, status) {

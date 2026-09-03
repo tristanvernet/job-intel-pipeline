@@ -220,6 +220,41 @@ def test_stats(client):
     assert s["total"] == 2 and s["internship"] == 1 and s["swe"] == 1 and s["systems"] == 1
 
 
+def test_analytics_baseline_counts(client):
+    a = client.get("/api/analytics").json()
+    # Fixture seeds two 'new' jobs, nothing applied/saved/archived yet.
+    assert a["inbox"] == 2
+    assert a["applied"] == 0
+    assert a["saved"] == 0
+    assert a["archived"] == 0
+    assert a["applied_last_7_days"] == 0
+
+
+def test_analytics_reflects_status_changes(client):
+    client.post("/api/jobs/job1/status", json={"status": "applied"})
+    client.post("/api/jobs/job2/status", json={"status": "saved"})
+    a = client.get("/api/analytics").json()
+    assert a["inbox"] == 0
+    assert a["applied"] == 1
+    assert a["saved"] == 1
+    assert a["archived"] == 0
+    # A fresh application is timestamped now, so it lands in the 7-day window.
+    assert a["applied_last_7_days"] == 1
+
+
+def test_analytics_applied_last_7_days_excludes_old(client):
+    """An applied role stamped >7 days ago is counted in totals but not recent."""
+    client.post("/api/jobs/job1/status", json={"status": "applied"})
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE jobs SET applied_at = datetime('now', '-10 days') WHERE id = ?",
+            ("job1",),
+        )
+    a = client.get("/api/analytics").json()
+    assert a["applied"] == 1
+    assert a["applied_last_7_days"] == 0
+
+
 def test_update_status_and_tabs(client):
     r = client.post("/api/jobs/job1/status", json={"status": "saved"})
     assert r.status_code == 200

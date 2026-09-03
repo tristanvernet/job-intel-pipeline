@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     date_posted TEXT,
     date_discovered TEXT DEFAULT CURRENT_TIMESTAMP,
     status TEXT DEFAULT 'new' CHECK(status IN ('new', 'applied', 'saved', 'archived')),
+    applied_at TEXT,
     raw_description TEXT,
     summary TEXT,
     tailored_bullets TEXT,
@@ -74,10 +75,27 @@ def _migrate_status_check(conn: sqlite3.Connection):
     conn.execute("PRAGMA foreign_keys=ON")
 
 
+def _migrate_applied_at(conn: sqlite3.Connection):
+    """Additive migration: add the applied_at timestamp column if missing.
+
+    Used by the analytics funnel to know when a role entered the APPLIED
+    state. Existing rows keep a NULL applied_at until re-applied.
+    """
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone()
+    if not table_exists:
+        return
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+    if "applied_at" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN applied_at TEXT")
+
+
 def init_db():
     with get_connection() as conn:
         conn.execute(_CREATE_JOBS_SQL)
         _migrate_status_check(conn)
+        _migrate_applied_at(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_track_status ON jobs(track, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON jobs(domain)")
 
