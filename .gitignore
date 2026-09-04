@@ -13,3 +13,4 @@ resume.txt
 resume.pdf
 resume.docx
 *.lock
+jobs.db*
