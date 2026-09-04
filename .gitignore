@@ -5,5 +5,11 @@ jobs.db
 *.csv
 .pytest_cache/
 logs/
-resume.txt
 .DS_Store
+
+# Personal résumé artifacts & derived profile
+profile.json
+resume.txt
+resume.pdf
+resume.docx
+*.lock

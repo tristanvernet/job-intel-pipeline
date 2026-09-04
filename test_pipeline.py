@@ -545,3 +545,48 @@ def test_run_pipeline_exits_gracefully_when_locked(tmp_path, monkeypatch):
     assert summary["new_count"] == 0
     assert summary.get("skipped") is True
     assert called == []  # no collector ran while the lock was held
+
+
+# --------------------------------------------------------------------------- #
+# Profile sync: monotonicity (manual tuning never downgraded) and idempotence.
+# --------------------------------------------------------------------------- #
+def _write_resume(path, text):
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def test_merge_sections_never_downgrades_existing_weight():
+    base = {"languages": {"python": 1.0}, "frameworks": {}, "skills": {},
+            "keywords": {}, "score_saturation": 4.0}
+    incoming = {"languages": {"python": 0.4, "go": 0.7}}
+    merged = sync_profile.merge_sections(base, incoming)
+    assert merged["languages"]["python"] == 1.0   # hand-tuned weight kept
+    assert merged["languages"]["go"] == 0.7       # new term still added
+
+
+def test_build_profile_is_idempotent(tmp_path):
+    """Re-syncing the same resume must yield the identical profile."""
+    resume = _write_resume(
+        tmp_path / "resume.txt",
+        "Python python python FastAPI backend engineer. Docker and SQL.",
+    )
+    profile_path = tmp_path / "profile.json"
+    first = sync_profile.build_profile(resume=resume, profile_path=profile_path)
+    sync_profile.save_profile(first, profile_path)
+    second = sync_profile.build_profile(resume=resume, profile_path=profile_path)
+    assert first == second
+
+
+def test_build_profile_preserves_manual_weights(tmp_path):
+    """A hand-tuned high weight must survive a sync that detects a lower one."""
+    resume = _write_resume(tmp_path / "resume.txt", "Some python experience.")
+    profile_path = tmp_path / "profile.json"
+    sync_profile.save_profile(
+        {"name": "Candidate Profile",
+         "languages": {"python": 1.0},
+         "frameworks": {}, "skills": {}, "keywords": {},
+         "score_saturation": 4.0},
+        profile_path,
+    )
+    updated = sync_profile.build_profile(resume=resume, profile_path=profile_path)
+    assert updated["languages"]["python"] == 1.0

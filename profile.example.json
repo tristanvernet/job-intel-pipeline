@@ -1,0 +1,29 @@
+{
+  "name": "Candidate Profile",
+  "description": "Deterministic match-scoring profile. Weights are 0..1 relevance scores per term. Copy to profile.json, then edit by hand or regenerate with sync_profile.py.",
+  "languages": {
+    "python": 1.0,
+    "java": 0.8,
+    "sql": 0.7
+  },
+  "frameworks": {
+    "fastapi": 1.0,
+    "django": 0.6,
+    "react": 0.5,
+    "docker": 0.8
+  },
+  "skills": {
+    "backend": 1.0,
+    "systems": 0.8,
+    "api": 0.7,
+    "testing": 0.9,
+    "ci/cd": 0.8
+  },
+  "keywords": {
+    "software": 1.0,
+    "engineer": 0.8,
+    "developer": 0.8,
+    "platform": 0.6
+  },
+  "score_saturation": 4.0
+}
