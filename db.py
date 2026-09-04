@@ -72,12 +72,25 @@ def _migrate_status_check(conn: sqlite3.Connection):
     )
     cols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
     col_list = ", ".join(cols)
-    conn.execute("PRAGMA foreign_keys=OFF")
-    conn.execute("ALTER TABLE jobs RENAME TO jobs_legacy")
-    conn.execute(_CREATE_JOBS_SQL)
-    conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM jobs_legacy")
-    conn.execute("DROP TABLE jobs_legacy")
-    conn.execute("PRAGMA foreign_keys=ON")
+    # Commit the normalization UPDATE above so the rebuild can own an explicit
+    # transaction: a crash mid-rebuild must never strand data in jobs_legacy.
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE jobs RENAME TO jobs_legacy")
+        conn.execute(_CREATE_JOBS_SQL)
+        conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM jobs_legacy")
+        conn.execute("DROP TABLE jobs_legacy")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        # Best-effort restore: if the rename succeeded before the failure,
+        # put the original table back rather than leaving only jobs_legacy.
+        try:
+            conn.execute("ALTER TABLE jobs_legacy RENAME TO jobs")
+        except sqlite3.OperationalError:
+            pass
+        raise
 
 
 def _migrate_applied_at(conn: sqlite3.Connection):
