@@ -469,3 +469,79 @@ def test_build_profile_requires_a_source():
 def test_extract_text_missing_file():
     with pytest.raises(FileNotFoundError):
         sync_profile.extract_text_from_resume("/no/such/resume.md")
+
+
+# --------------------------------------------------------------------------- #
+# Regression tests: audit fixes (id collisions, ingestion safety, domain
+# word boundaries, worker overlap lock).
+# --------------------------------------------------------------------------- #
+def test_job_id_distinguishes_symbol_titles():
+    """'C++ Engineer' and 'C# Engineer' must not collapse to the same id."""
+    id_plus = db.generate_job_id("Acme", "C++ Engineer", "NYC")
+    id_sharp = db.generate_job_id("Acme", "C# Engineer", "NYC")
+    assert id_plus != id_sharp
+
+
+def test_job_id_distinguishes_locations():
+    """Same title at the same company in different cities = distinct roles."""
+    id_nyc = db.generate_job_id("Acme", "Software Engineer", "New York, NY")
+    id_sf = db.generate_job_id("Acme", "Software Engineer", "San Francisco, CA")
+    assert id_nyc != id_sf
+
+
+def test_job_id_stable_under_whitespace_and_case():
+    a = db.generate_job_id("Acme  Corp ", "Software   Engineer", "Remote")
+    b = db.generate_job_id("acme corp", "software engineer", "remote")
+    assert a == b
+
+
+def test_insert_job_missing_title_or_url_returns_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
+    db.init_db()
+    # Must return False cleanly -- never raise KeyError.
+    assert db.insert_job({"company": "Acme", "url": "https://x.com/1"}) is False
+    assert db.insert_job({"company": "Acme", "title": "SWE"}) is False
+    assert db.insert_job({"company": "Acme", "title": "  ", "url": " "}) is False
+
+
+@pytest.mark.parametrize("title", [
+    "Retail Associate",
+    "Detail Oriented Coordinator",
+    "Html Email Developer",
+    "Plaid Software Engineer",
+])
+def test_classify_domain_no_acronym_false_positives(title):
+    assert classify_domain(title) != "AI/ML"
+
+
+@pytest.mark.parametrize("title", [
+    "AI Engineer",
+    "Machine Learning Intern",
+    "NLP Research Intern",
+    "LLM Infrastructure Engineer",
+])
+def test_classify_domain_true_aiml_hits(title):
+    assert classify_domain(title) == "AI/ML"
+
+
+def test_run_pipeline_exits_gracefully_when_locked(tmp_path, monkeypatch):
+    """An active lockfile must stop a second run without scraping anything."""
+    import fcntl
+    import worker
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
+    monkeypatch.setattr(worker, "LOCK_PATH", tmp_path / "test.lock")
+
+    called = []
+    monkeypatch.setattr("fetch_github.run_github_fetch",
+                        lambda: called.append("github"), raising=False)
+    monkeypatch.setattr("scout.run_scout",
+                        lambda: called.append("scout"), raising=False)
+
+    with open(tmp_path / "test.lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        summary = worker.run_pipeline()
+
+    assert summary["new_count"] == 0
+    assert summary.get("skipped") is True
+    assert called == []  # no collector ran while the lock was held

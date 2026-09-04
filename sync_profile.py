@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -187,33 +188,45 @@ def fetch_github_profile(username: str, timeout: float = 10.0) -> Dict[str, Dict
         raise RuntimeError(f"GitHub returned HTTP {resp.status_code} for '{username}'.")
 
     repos = resp.json()
-    lang_bytes: Counter[str] = Counter()
+    lang_bytes: Counter[str] = Counter()    # precise: raw bytes per language
+    lang_coarse: Counter[str] = Counter()   # fallback: primary language per repo
     topics: Counter[str] = Counter()
+
+    # Cap precise fetching at the 20 most recently updated repos (the list is
+    # already sorted by `updated`) so a large account never triggers a burst
+    # of ~100 sequential calls and secondary rate limits.
+    precise_budget = 20
 
     for repo in repos:
         if repo.get("fork"):
             continue
         primary = repo.get("language")
         if primary:
-            lang_bytes[primary.lower()] += 1  # coarse count; refined below if reachable
+            lang_coarse[primary.lower()] += 1
         for topic in repo.get("topics") or []:
             topics[topic.lower()] += 1
 
-        # Best-effort precise byte counts per language.
+        # Best-effort precise byte counts per language, politely throttled.
         lang_url = repo.get("languages_url")
-        if lang_url:
+        if lang_url and precise_budget > 0:
+            precise_budget -= 1
+            time.sleep(0.1)  # avoid secondary rate limits
             try:
                 lr = requests.get(lang_url, headers=headers, timeout=timeout)
                 if lr.status_code == 200:
                     for lang, byte_count in lr.json().items():
                         lang_bytes[lang.lower()] += int(byte_count)
             except (requests.RequestException, ValueError):
-                # Non-fatal: fall back to the coarse per-repo language count.
+                # Non-fatal: this repo just won't contribute byte counts.
                 continue
+
+    # Never mix units: prefer raw byte counts when any were fetched; fall back
+    # to coarse per-repo primary-language counts only when none succeeded.
+    lang_counts = lang_bytes if lang_bytes else lang_coarse
 
     return {
         "languages": _normalize_weights(
-            {_GH_LANG_ALIASES.get(k, k): v for k, v in lang_bytes.items()}
+            {_GH_LANG_ALIASES.get(k, k): v for k, v in lang_counts.items()}
         ),
         "keywords": _normalize_weights(dict(topics)),
     }

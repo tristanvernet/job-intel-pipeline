@@ -155,15 +155,15 @@ def analytics(conn=Depends(get_db)):
 def update_status(job_id: str, payload: StatusUpdate, conn=Depends(get_db)):
     if payload.status not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {payload.status}")
-    if payload.status == "applied":
-        cur = conn.execute(
-            "UPDATE jobs SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (payload.status, job_id),
-        )
-    else:
-        cur = conn.execute(
-            "UPDATE jobs SET status = ? WHERE id = ?", (payload.status, job_id)
-        )
+    # Single statement: `applied_at` is stamped exactly when entering the
+    # applied state and NULLed on any reversal, so analytics never see stale
+    # timestamps on jobs that were un-applied.
+    cur = conn.execute(
+        "UPDATE jobs SET status = ?, "
+        "applied_at = CASE WHEN ? = 'applied' THEN CURRENT_TIMESTAMP ELSE NULL END "
+        "WHERE id = ?",
+        (payload.status, payload.status, job_id),
+    )
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job_id": job_id, "status": payload.status}
