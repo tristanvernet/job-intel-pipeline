@@ -1,35 +1,42 @@
 # Job Intel Hub
 
-A high-velocity, keyboard-first job triage workstation built for clearing hundreds of tech roles without browser tab sprawl.
+An autonomous, end-to-end job intelligence pipeline and keyboard-driven triage workstation for technical roles.
+
+## System overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Inbox 312  ·  Applied 24  ·  Saved 18  ·  Archived 489      │
-├───────────────────────────────┬─────────────────────────────┤
-│ ● Stripe   SWE Intern · SF    │  Stripe — SWE Intern        │
-│ ◐ Ramp     Backend Int · NYC  │  Match 87% █████████░       │
-│ ○ Acme     SWE I · Remote     │  ✓ python  ✓ fastapi        │
-│ ○ Plaid    SWE Intern · NY    │  ✗ docker  ✗ terraform      │
-│  ← stream                     │  Description · Prep notes   │
-│                               │  → inspector                │
-└───────────────────────────────┴─────────────────────────────┘
+  Ingestion Feeds            Match & Intel              Triage Workstation
+ ┌─────────────────┐        ┌─────────────────┐        ┌──────────────────┐
+ │ GitHub early-   │        │ profile.json    │        │ 44px dense       │
+ │ career indexes  │        │ de-saturated    │        │ stream           │
+ │ ─────────────── │  WAL   │ scoring (6.0)   │  API   │ ──────────────── │
+ │ board scrapers  │ ─────▶ │ explicit chips  │ ─────▶ │ persistent       │
+ │ payload clean-  │ dedupe │ matched/missing │        │ inspector        │
+ │ ing & normalize │        │ prep synthesis  │        │ a/s/x/z triage   │
+ └─────────────────┘        └─────────────────┘        └──────────────────┘
 ```
 
-## The problem
+The pipeline runs continuously: ingestion feeds pull early-career roles from curated GitHub lists and broad board scrapers, dedupe them against the local store, and the workstation presents them in a single-pane triage view built for clearing hundreds of roles without losing your place.
 
-Card walls collapse at inbox scale. Rendering 1,000 roles as a grid of cards means roughly eight visual regions per item and a hard scroll cap on what you can review before fatigue sets in. Most attempts fix this with keyword scoring, which creates the opposite problem: every entry-level role saturates to `100%` and the ranking carries no signal.
+## Core pillars
 
-High-throughput triage is a different discipline. It needs one glance line per item, one keystroke per decision, and mutations that land instantly instead of round-tripping through a server on every action. That is what this workstation is built around.
+### Ingestion and sourcing
 
-## Workstation features
+Continuous early-career aggregation from curated early-career indexes and general board scrapers. Every payload is normalized on the way in: markdown artifacts stripped, junk URL parameters removed, and unified into a single schema with deterministic IDs (`company|title|location` SHA-256, symbols preserved so `C++ Engineer` and `C# Engineer` never collide).
 
-**Ergonomic triage.** A Linear-style split pane: a scrollable 44px dense stream on the left and a sticky inspection drawer on the right. The list never reflows while you inspect.
+The store is SQLite in WAL mode (`PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=15000`) with `check_same_thread=False`. Background scrapers write while the FastAPI service reads, without lock contention or threadpool errors.
 
-**Explainable match engine.** Scores are relative tiers (Emerald 90+, Sky 75+, Zinc below) instead of saturated percentages. The inspector renders the exact breakdown: matched keywords as green chips, missing profile keywords as muted chips, capped at six with a `+N more` toggle.
+### Intelligence and matching
 
-**Zero-latency mutations.** Status updates apply locally first and sync in the background. A three-second undo stack (`z`) recovers any action, and the cursor clamps to the nearest row instead of resetting to the top. If the background call fails, state reverts and an error banner explains what happened.
+Matching is driven by a local `profile.json` — a weighted keyword map of languages, frameworks, skills, and domains. Scoring is deliberately de-saturated (6.0 target) so entry-level roles do not cluster at an artificial `100%`; the score carries signal across the whole pool instead of shouting.
 
-**Telemetry and hygiene.** A header strip shows scrape freshness and indexed role count from `SELECT MAX(date_discovered) FROM jobs`, and every status tab carries a live count. Scraped descriptions and summaries are escaped before rendering.
+Every score is explainable: the inspector renders matched keywords as green chips and missing profile keywords as muted chips, capped at six with a `+N more` disclosure. Interview prep gets its own synthesis pass per role, producing a summary and tailored alignment bullets.
+
+### Ergonomic workstation
+
+Linear-style split pane: a 44px dense stream on the left and a persistent inspector on the right that never shifts the stream. Mutations are optimistic — status changes land locally before the network, the cursor clamps to the nearest row instead of snapping to the top, and a three-second undo stack (`z`) recovers any action. Failed background syncs revert state and surface an auto-dismissing error banner.
+
+Presented on a WCAG-compliant dark zinc palette (`zinc-950` canvas) with high-contrast cursor states and a strict single-accent (sky) discipline.
 
 ## Keyboard shortcuts
 
@@ -45,13 +52,12 @@ High-throughput triage is a different discipline. It needs one glance line per i
 | `/` | Focus search |
 | `Esc` | Blur search or clear the inspector |
 
-## Architecture
+## Technical stack
 
-The backend is FastAPI with sync route handlers and a generator dependency that yields a dedicated connection per request and always closes it in `finally`. Cross-thread safety comes from `check_same_thread=False` on the sqlite connection: Starlette's threadpool can hand the generator between threads, and each request still owns an exclusive handle.
-
-Storage is SQLite in WAL mode (`PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=15000`), which lets the launchd-driven background scraper write while the API serves reads without lock contention.
-
-The frontend is a single `templates/index.html` with Tailwind, using a strict dark zinc palette (`zinc-950` canvas) and WCAG-compliant text contrast. No frameworks, no build step.
+- **FastAPI**, sync route handlers with a threadpool-safe generator dependency that yields one connection per request and closes it in `finally`.
+- **SQLite** in WAL mode (`busy_timeout=15000`, `check_same_thread=False`), schema-migrated via transactional rebuilds with rollback-restore.
+- **Tailwind CSS** served as a single static template — zero npm dependencies, zero build steps.
+- **Pytest** covering scoring determinism, ingestion resilience, status transitions, migration safety, and lockfile overlap.
 
 ## Quickstart
 
@@ -61,16 +67,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run the test suite:
+Run the suite:
 
 ```bash
 pytest -q
 ```
 
-Launch the workstation:
+Launch:
 
 ```bash
 uvicorn app:app --reload --port 8000
 ```
 
-Open `http://127.0.0.1:8000`. The Inbox tab loads on first render; press `/` to search.
+Open `http://127.0.0.1:8000`. The Inbox tab loads first; `/` focuses search.
