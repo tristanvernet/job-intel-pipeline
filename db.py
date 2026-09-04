@@ -8,7 +8,12 @@ DB_PATH = Path(__file__).parent / "jobs.db"
 def get_connection() -> sqlite3.Connection:
     # WAL + busy_timeout so the launchd worker (long bulk writes) and uvicorn
     # (reads/status updates) never hit 'database is locked' on overlap.
-    conn = sqlite3.connect(DB_PATH, timeout=15)
+    # check_same_thread=False is required because FastAPI runs sync routes and
+    # generator dependencies in Starlette's anyio threadpool: the connection
+    # created on one worker thread may be used/closed on another. Safety is
+    # preserved because each request/worker step gets its OWN connection and
+    # closes it in finally -- connections are never shared across threads.
+    conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
