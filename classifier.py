@@ -71,7 +71,11 @@ _TECHNICAL_SWE_TOKENS = [
 
 def classify_domain(title: str) -> Optional[str]:
     t = title.lower()
-    if any(k in t for k in ["ai", "machine learning", "ml", "nlp", "computer vision", "llm", "deep learning"]):
+    # Word-boundary match for short acronyms so "Retail", "Detail" or "Html"
+    # never false-positive into AI/ML. Multi-word phrases are safe as substrings.
+    if re.search(r"\b(ai|ml|nlp|llm)\b", t) or any(
+        k in t for k in ["machine learning", "computer vision", "deep learning"]
+    ):
         return "AI/ML"
     if any(k in t for k in ["embedded", "systems engineer", "infrastructure", "platform engineer", "kernel", "operating system", "devops", "sre"]):
         return "Systems"

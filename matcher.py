@@ -115,18 +115,23 @@ def role_text(job: Dict[str, Any]) -> str:
     return " ".join(_normalize(job.get(f)) for f in _ROLE_FIELDS)
 
 
-def match_score(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> int:
+def match_score(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None,
+                _terms: Optional[Dict[str, float]] = None) -> int:
     """Return a deterministic 0-100 fit score for `job` against `profile`.
 
     Score = 100 * min(1, matched_weight / saturation), rounded to an int.
     An empty/None job or a profile with no matches yields 0.
+
+    Bulk callers (e.g. /api/jobs scoring hundreds of rows) should pass
+    ``_terms=flatten_terms(profile)`` so the weighted-term map is built once
+    instead of once per job.
     """
     if profile is None:
         profile = load_profile()
 
     text_norm = role_text(job or {})
     tokens = tokenize(text_norm)
-    terms = flatten_terms(profile)
+    terms = _terms if _terms is not None else flatten_terms(profile)
 
     matched_weight = 0.0
     for term, weight in terms.items():

@@ -194,20 +194,33 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str, stats
 
 
 def run_github_fetch():
+    """Fetch all curated sources. Returns a per-source outcome report.
+
+    Each entry is {"source", "ok", "added", "skipped", "error"} so callers can
+    distinguish a genuinely empty source (ok=True, added=0) from a broken one
+    (ok=False, error set) -- a 404/branch rename must never look like success.
+    """
     print("[GitHub Scout] Fetching curated early-career repositories...")
     total_new = 0
     total_skipped = 0
+    outcomes = []
 
     for src in SOURCES:
-        print(f"  Fetching: {src['url'].split('/')[-3]} ({src['default_track']})...")
+        name = src["url"].split("/")[-3]
+        print(f"  Fetching: {name} ({src['default_track']})...")
         try:
             resp = requests.get(src["url"], timeout=10)
         except requests.RequestException as e:
-            print(f"    -> Network error: {e}")
+            print(f"    -> SOURCE FAILED (network): {e}")
+            outcomes.append({"source": name, "ok": False, "added": 0,
+                             "skipped": 0, "error": f"network: {e}"})
             continue
 
         if resp.status_code != 200:
-            print(f"    -> HTTP {resp.status_code} (repo may use a different branch/path)")
+            print(f"    -> SOURCE FAILED: HTTP {resp.status_code} "
+                  f"(repo may use a different branch/path)")
+            outcomes.append({"source": name, "ok": False, "added": 0,
+                             "skipped": 0, "error": f"http {resp.status_code}"})
             continue
 
         stats = {}
@@ -227,10 +240,17 @@ def run_github_fetch():
         print(f"         unknown domain          : {r.get('unknown_domain', 0)}")
         total_new += added
         total_skipped += skipped
+        outcomes.append({"source": name, "ok": True, "added": added,
+                         "skipped": skipped, "error": None})
 
+    failed = [o for o in outcomes if not o["ok"]]
     print("==========================================")
     print(f"GitHub Scout Complete: {total_new} added to jobs.db")
+    if failed:
+        print(f"WARNING: {len(failed)}/{len(outcomes)} source(s) FAILED: "
+              + ", ".join(f"{o['source']} ({o['error']})" for o in failed))
     print("==========================================")
+    return outcomes
 
 
 if __name__ == "__main__":

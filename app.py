@@ -8,7 +8,33 @@ from typing import Optional
 
 from db import init_db, get_connection, VALID_STATUSES
 from prep import get_prep_provider
-from matcher import load_profile, match_score
+from matcher import PROFILE_PATH, flatten_terms, load_profile, match_score
+
+# Profile cache keyed on profile.json mtime: avoids re-reading and re-parsing
+# the file on every API request while still picking up hand edits instantly.
+_PROFILE_CACHE: dict = {}
+
+
+def cached_profile() -> dict:
+    try:
+        mtime = PROFILE_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _PROFILE_CACHE.get("mtime") != mtime:
+        _PROFILE_CACHE.clear()
+        _PROFILE_CACHE.update(data=load_profile(), mtime=mtime)
+    return _PROFILE_CACHE["data"]
+
+
+# Columns the list view actually renders; raw_description (KBs per row) is
+# deliberately excluded from the bulk payload. Full rows still come from the
+# per-job endpoints.
+_JOB_LIST_COLS = (
+    "id, company, title, url, location, is_remote, track, term, domain, "
+    "source, date_posted, date_discovered, status, applied_at, summary, "
+    "tailored_bullets"
+)
+_JOB_LIST_LIMIT = 500
 
 DB_PATH = Path(__file__).parent / "jobs.db"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -49,7 +75,7 @@ def list_jobs(
     search: Optional[str] = None,
     conn=Depends(get_db),
 ):
-    query = "SELECT * FROM jobs WHERE 1=1"
+    query = f"SELECT {_JOB_LIST_COLS} FROM jobs WHERE 1=1"
     params = []
 
     if track and track != "all":
@@ -66,16 +92,18 @@ def list_jobs(
         query += " AND (company LIKE ? OR title LIKE ? OR location LIKE ?)"
         params.extend([like, like, like])
 
-    query += " ORDER BY date_discovered DESC"
+    query += " ORDER BY date_discovered DESC LIMIT ?"
+    params.append(_JOB_LIST_LIMIT)
 
     rows = [dict(r) for r in conn.execute(query, params).fetchall()]
 
     # Attach a deterministic 0-100 match score to every job, then sort the
     # Inbox (and every view) by score descending. The fetch above is already
     # date-descending, so this stable sort keeps newest-first within ties.
-    profile = load_profile()
+    profile = cached_profile()
+    terms = flatten_terms(profile)
     for row in rows:
-        row["match_score"] = match_score(row, profile)
+        row["match_score"] = match_score(row, profile, _terms=terms)
     rows.sort(key=lambda r: r["match_score"], reverse=True)
     return rows
 
