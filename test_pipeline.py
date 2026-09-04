@@ -389,7 +389,12 @@ def test_shipped_profile_json_scores_reasonably():
     prof = matcher.load_profile()  # real profile.json
     strong = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
     weak = {"title": "Store Clerk", "track": "full_time", "domain": "General"}
-    assert matcher.match_score(strong, prof) >= 70
+    # Saturation is intentionally softened (6.0) so entry-level roles spread
+    # instead of clustering at 100: a strong role must score clearly high but
+    # must NOT saturate, and an irrelevant role must stay at 0.
+    strong_score = matcher.match_score(strong, prof)
+    assert strong_score >= 50
+    assert strong_score < 95
     assert matcher.match_score(weak, prof) == 0
 
 

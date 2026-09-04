@@ -31,8 +31,9 @@ _ROLE_FIELDS = ("title", "track", "domain")
 _TOKEN_RE = re.compile(r"[a-z0-9+#.]+")
 
 # Default saturation: the matched weight at which a job hits 100%. Kept here so
-# scoring still works if profile.json is missing or omits the key.
-_DEFAULT_SATURATION = 4.0
+# scoring still works if profile.json is missing or omits the key. 6.0 keeps
+# entry-level roles from all saturating at 100% -- a spread preserves signal.
+_DEFAULT_SATURATION = 6.0
 
 
 def _default_profile() -> Dict[str, Any]:

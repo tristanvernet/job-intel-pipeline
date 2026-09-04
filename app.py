@@ -8,7 +8,7 @@ from typing import Optional
 
 from db import init_db, get_connection, VALID_STATUSES
 from prep import get_prep_provider
-from matcher import PROFILE_PATH, flatten_terms, load_profile, match_score
+from matcher import PROFILE_PATH, explain, flatten_terms, load_profile, match_score
 
 # Profile cache keyed on profile.json mtime: avoids re-reading and re-parsing
 # the file on every API request while still picking up hand edits instantly.
@@ -73,6 +73,7 @@ def list_jobs(
     domain: Optional[str] = None,
     status: Optional[str] = "new",
     search: Optional[str] = None,
+    sort: Optional[str] = "score_desc",
     conn=Depends(get_db),
 ):
     query = f"SELECT {_JOB_LIST_COLS} FROM jobs WHERE 1=1"
@@ -104,8 +105,33 @@ def list_jobs(
     terms = flatten_terms(profile)
     for row in rows:
         row["match_score"] = match_score(row, profile, _terms=terms)
-    rows.sort(key=lambda r: r["match_score"], reverse=True)
+    if sort != "date_desc":  # default score_desc; fetch is already date-desc
+        rows.sort(key=lambda r: r["match_score"], reverse=True)
     return rows
+
+
+@app.get("/api/jobs/{job_id}")
+def job_detail(job_id: str, conn=Depends(get_db)):
+    """Full single-job payload: raw_description plus a match breakdown.
+
+    `match.matched_terms` are profile terms that hit; `missing_terms` are the
+    remaining weighted profile terms, so the UI can render fit vs. gap chips.
+    """
+    row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = dict(row)
+    profile = cached_profile()
+    terms = flatten_terms(profile)
+    info = explain(job, profile)
+    matched = info["matched_terms"]
+    job["match_score"] = info["score"]
+    job["match"] = {
+        "matched_terms": matched,
+        "missing_terms": {t: w for t, w in terms.items() if t not in matched},
+        "matched_weight": info["matched_weight"],
+    }
+    return job
 
 
 @app.get("/api/stats")
@@ -148,6 +174,11 @@ def analytics(conn=Depends(get_db)):
         "saved": count(" WHERE status = ?", ("saved",)),
         "archived": count(" WHERE status = ?", ("archived",)),
         "applied_last_7_days": applied_last_7_days,
+        # Pipeline liveness: newest discovery timestamp across all rows
+        # (NULL when the DB is empty -- the UI renders 'never scraped').
+        "last_scraped": conn.execute(
+            "SELECT MAX(date_discovered) FROM jobs"
+        ).fetchone()[0],
     }
 
 

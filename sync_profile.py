@@ -65,7 +65,7 @@ _SECTION_VOCAB = {
 # GitHub language name -> our canonical language key.
 _GH_LANG_ALIASES = {"go": "go", "golang": "go", "c++": "c++", "c#": "c#"}
 
-_DEFAULT_SATURATION = 4.0
+_DEFAULT_SATURATION = 6.0
 
 
 # --------------------------------------------------------------------------- #
