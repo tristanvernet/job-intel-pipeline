@@ -6,8 +6,13 @@ from typing import Optional, Dict, Any
 DB_PATH = Path(__file__).parent / "jobs.db"
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    # WAL + busy_timeout so the launchd worker (long bulk writes) and uvicorn
+    # (reads/status updates) never hit 'database is locked' on overlap.
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=15000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 # Canonical status values. `new` surfaces in the Inbox tab.
@@ -98,6 +103,9 @@ def init_db():
         _migrate_applied_at(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_track_status ON jobs(track, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON jobs(domain)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON jobs(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_discovered ON jobs(date_discovered DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_applied_at ON jobs(applied_at)")
 
 def all_job_ids() -> set:
     """Return the set of every job id currently stored.
@@ -109,23 +117,34 @@ def all_job_ids() -> set:
         return {row[0] for row in conn.execute("SELECT id FROM jobs").fetchall()}
 
 
-def generate_job_id(company: str, title: str) -> str:
-    """Dedup primarily on normalized company + normalized title."""
-    clean_company = re_clean(company)
-    clean_title = re_clean(title)
-    raw = f"{clean_company}|{clean_title}"
+def generate_job_id(company: str, title: str, location: str = "") -> str:
+    """Dedup on normalized company + title + location.
+
+    Normalization only lowercases and collapses whitespace: symbols like '+'
+    and '#' are preserved so 'C++ Engineer' and 'C# Engineer' never collide,
+    and the location component keeps same-title roles in different cities
+    (NYC vs SF) as distinct rows.
+    """
+    raw = "|".join([re_clean(company), re_clean(title), re_clean(location)])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 def re_clean(text: str) -> str:
     import re
-    return re.sub(r"[^a-zA-Z0-9]", "", text or "").lower()
+    return re.sub(r"\s+", " ", (text or "").lower().strip())
 
 def insert_job(job_data: Dict[str, Any]) -> bool:
     company = str(job_data.get("company") or "").strip()
     if not company or company.lower() == "nan":
         company = "Unknown Company"
 
-    job_id = job_data.get("id") or generate_job_id(company, job_data["title"])
+    title = str(job_data.get("title") or "").strip()
+    url = str(job_data.get("url") or "").strip()
+    if not title or not url:
+        return False
+
+    job_id = job_data.get("id") or generate_job_id(
+        company, title, str(job_data.get("location") or "")
+    )
     
     with get_connection() as conn:
         try:
@@ -137,8 +156,8 @@ def insert_job(job_data: Dict[str, Any]) -> bool:
             """, (
                 job_id,
                 company,
-                job_data["title"],
-                job_data["url"],
+                title,
+                url,
                 job_data.get("location"),
                 1 if job_data.get("is_remote") else 0,
                 job_data.get("track", "unclear"),

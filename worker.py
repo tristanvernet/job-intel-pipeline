@@ -17,7 +17,15 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 from typing import Callable, Dict, Optional
+
+try:
+    import fcntl  # POSIX-only; absent on Windows
+except ImportError:  # pragma: no cover - platform guard
+    fcntl = None
+
+LOCK_PATH = Path.home() / ".jobintel.lock"
 
 import db
 import notify
@@ -39,21 +47,37 @@ def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[st
     Returns a dict with ``new_count``, the sorted list of ``new_ids``, and the
     total ``elapsed`` seconds.
     """
-    db.init_db()
-    before = db.all_job_ids()
-    started = time.time()
+    # Overlap guard: a long scout run (5-15 min of polite sleeps) must never
+    # race a second launchd fire. Non-blocking flock -> exit cleanly if busy.
+    lock_fd = None
+    if fcntl is not None:
+        lock_fd = open(LOCK_PATH, "w")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("[worker] another run already in progress; exiting.", file=sys.stderr)
+            lock_fd.close()
+            return {"new_count": 0, "new_ids": [], "elapsed": 0.0, "skipped": True}
 
-    if not skip_github:
-        import fetch_github
-        _run_step("fetch_github", fetch_github.run_github_fetch)
-    if not skip_scout:
-        import scout
-        _run_step("scout", scout.run_scout)
+    try:
+        db.init_db()
+        before = db.all_job_ids()
+        started = time.time()
 
-    after = db.all_job_ids()
-    new_ids = sorted(after - before)
-    elapsed = time.time() - started
-    return {"new_count": len(new_ids), "new_ids": new_ids, "elapsed": elapsed}
+        if not skip_github:
+            import fetch_github
+            _run_step("fetch_github", fetch_github.run_github_fetch)
+        if not skip_scout:
+            import scout
+            _run_step("scout", scout.run_scout)
+
+        after = db.all_job_ids()
+        new_ids = sorted(after - before)
+        elapsed = time.time() - started
+        return {"new_count": len(new_ids), "new_ids": new_ids, "elapsed": elapsed}
+    finally:
+        if lock_fd is not None:
+            lock_fd.close()  # closing the fd releases the flock
 
 
 def _window_label(schedule: Optional[Dict[str, object]]) -> str:

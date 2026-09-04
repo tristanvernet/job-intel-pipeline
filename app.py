@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import sqlite3
@@ -24,7 +24,17 @@ app = FastAPI(title="Job Intel Hub", lifespan=lifespan)
 
 
 def get_db():
-    return get_connection()
+    """FastAPI dependency: yields a connection and ALWAYS closes it.
+
+    `with conn:` only commits/rolls back -- it never closes. Relying on GC to
+    release the handle leaks a file descriptor per request under uvicorn.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class StatusUpdate(BaseModel):
@@ -37,6 +47,7 @@ def list_jobs(
     domain: Optional[str] = None,
     status: Optional[str] = "new",
     search: Optional[str] = None,
+    conn=Depends(get_db),
 ):
     query = "SELECT * FROM jobs WHERE 1=1"
     params = []
@@ -57,8 +68,7 @@ def list_jobs(
 
     query += " ORDER BY date_discovered DESC"
 
-    with get_db() as conn:
-        rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+    rows = [dict(r) for r in conn.execute(query, params).fetchall()]
 
     # Attach a deterministic 0-100 match score to every job, then sort the
     # Inbox (and every view) by score descending. The fetch above is already
@@ -71,12 +81,11 @@ def list_jobs(
 
 
 @app.get("/api/stats")
-def stats():
-    with get_db() as conn:
-        def count(where="", args=()):
-            return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
+def stats(conn=Depends(get_db)):
+    def count(where="", args=()):
+        return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
 
-        return {
+    return {
             "total": count(),
             "internship": count(" WHERE track = ?", ("internship",)),
             "full_time": count(" WHERE track = ?", ("full_time",)),
@@ -84,69 +93,66 @@ def stats():
             "systems": count(" WHERE domain = ?", ("Systems",)),
             "aiml": count(" WHERE domain = ?", ("AI/ML",)),
             "applied": count(" WHERE status = ?", ("applied",)),
-            "saved": count(" WHERE status = ?", ("saved",)),
-        }
+        "saved": count(" WHERE status = ?", ("saved",)),
+    }
 
 
 @app.get("/api/analytics")
-def analytics():
+def analytics(conn=Depends(get_db)):
     """Application funnel: total counts per pipeline stage plus recent momentum.
 
     `inbox` maps to the internal `new` status. `applied_last_7_days` counts
     roles whose applied_at timestamp falls within the trailing 7 days.
     """
-    with get_db() as conn:
-        def count(where="", args=()):
-            return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
+    def count(where="", args=()):
+        return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
 
-        applied_last_7_days = conn.execute(
-            "SELECT COUNT(*) FROM jobs "
-            "WHERE status = 'applied' "
-            "AND applied_at IS NOT NULL "
-            "AND applied_at >= datetime('now', '-7 days')"
-        ).fetchone()[0]
+    applied_last_7_days = conn.execute(
+        "SELECT COUNT(*) FROM jobs "
+        "WHERE status = 'applied' "
+        "AND applied_at IS NOT NULL "
+        "AND applied_at >= datetime('now', '-7 days')"
+    ).fetchone()[0]
 
-        return {
-            "inbox": count(" WHERE status = ?", ("new",)),
-            "applied": count(" WHERE status = ?", ("applied",)),
-            "saved": count(" WHERE status = ?", ("saved",)),
-            "archived": count(" WHERE status = ?", ("archived",)),
-            "applied_last_7_days": applied_last_7_days,
-        }
+    return {
+        "inbox": count(" WHERE status = ?", ("new",)),
+        "applied": count(" WHERE status = ?", ("applied",)),
+        "saved": count(" WHERE status = ?", ("saved",)),
+        "archived": count(" WHERE status = ?", ("archived",)),
+        "applied_last_7_days": applied_last_7_days,
+    }
 
 
 @app.post("/api/jobs/{job_id}/status")
-def update_status(job_id: str, payload: StatusUpdate):
+def update_status(job_id: str, payload: StatusUpdate, conn=Depends(get_db)):
     if payload.status not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {payload.status}")
-    with get_db() as conn:
-        if payload.status == "applied":
-            cur = conn.execute(
-                "UPDATE jobs SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (payload.status, job_id),
-            )
-        else:
-            cur = conn.execute(
-                "UPDATE jobs SET status = ? WHERE id = ?", (payload.status, job_id)
-            )
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Job not found")
+    if payload.status == "applied":
+        cur = conn.execute(
+            "UPDATE jobs SET status = ?, applied_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (payload.status, job_id),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE jobs SET status = ? WHERE id = ?", (payload.status, job_id)
+        )
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job_id": job_id, "status": payload.status}
 
 
 @app.post("/api/jobs/{job_id}/prep")
-def generate_prep(job_id: str):
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job = dict(row)
+def generate_prep(job_id: str, conn=Depends(get_db)):
+    row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = dict(row)
 
-        result = get_prep_provider().generate(job)
-        conn.execute(
-            "UPDATE jobs SET summary = ?, tailored_bullets = ? WHERE id = ?",
-            (result.summary, result.bullets_text(), job_id),
-        )
+    result = get_prep_provider().generate(job)
+    conn.execute(
+        "UPDATE jobs SET summary = ?, tailored_bullets = ? WHERE id = ?",
+        (result.summary, result.bullets_text(), job_id),
+    )
 
     return {
         "ok": True,
