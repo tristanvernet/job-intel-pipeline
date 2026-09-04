@@ -6,3 +6,4 @@ jobs.db
 .pytest_cache/
 logs/
 resume.txt
+.DS_Store
