@@ -15,9 +15,9 @@
     kbd.light { background:#f4f4f5; border-color:#d4d4d8; color:#52525b; }
     ::-webkit-scrollbar { width:10px; height:10px; }
     ::-webkit-scrollbar-thumb { background:#d4d4d8; border-radius:6px; }
-    .row { height:44px; cursor:pointer; }
+    .row { height:44px; cursor:pointer; border-left:4px solid transparent; }
     .row:hover { background:#fafafa; }
-    .row.active { background:#f4f4f5; box-shadow: inset 0 0 0 1px #d4d4d8; }
+    .row.active { background:rgba(244,244,245,.8); border-left:4px solid #18181b; box-shadow: inset 0 0 0 1px #e4e4e7; }
     .skel { height:44px; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #f4f4f5; }
     .skel > div { background:#f4f4f5; border-radius:4px; height:12px; animation:pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
@@ -49,7 +49,7 @@
       <button data-status="archived" class="tab" role="tab">Archived</button>
       <div class="ml-auto pb-1.5 flex items-center gap-2">
         <label class="text-[11px] text-zinc-400 font-mono">sort</label>
-        <select id="sort" class="text-xs border border-zinc-200 rounded-md px-1.5 py-1 bg-white text-zinc-700 focus:outline-none focus:border-zinc-400">
+        <select id="sort" class="text-xs border border-zinc-300 rounded-md px-1.5 py-1 bg-white text-zinc-800 font-medium focus:outline-none focus:border-zinc-500">
           <option value="score_desc">Best match</option>
           <option value="date_desc">Newest</option>
         </select>
@@ -59,7 +59,7 @@
       <div class="relative w-72">
         <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
         <input id="search" type="text" placeholder="Search company, title, location…" autocomplete="off"
-          class="w-full bg-white border border-zinc-200 rounded-md pl-8 pr-3 py-1.5 text-[13px] placeholder-zinc-400 focus:outline-none focus:border-zinc-400 transition" />
+          class="w-full bg-white border border-zinc-300 rounded-md pl-8 pr-3 py-1.5 text-[13px] text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 transition" />
       </div>
       <span id="result-count" class="text-[11px] font-mono tabular-nums text-zinc-400"></span>
       <span class="w-px h-4 bg-zinc-200"></span>
@@ -84,8 +84,8 @@
       <div id="rows"></div>
     </section>
     <aside id="detail" class="flex-1 overflow-y-auto bg-[#fafafa]" aria-label="Job detail">
-      <div class="h-full flex items-center justify-center text-sm text-zinc-400 p-8 text-center">
-        Select a role to inspect it.<br/><span class="text-xs text-zinc-400 font-mono mt-1 block">j / k to navigate</span>
+      <div class="h-full flex items-center justify-center text-sm text-zinc-500 p-8 text-center">
+        Select a role to inspect it.<br/><span class="text-xs text-zinc-500 font-mono mt-1 block">j / k to navigate</span>
       </div>
     </aside>
   </main>
@@ -181,10 +181,10 @@
     function renderRows(){
       const box = $('#rows');
       if (!state.jobs.length){
-        box.innerHTML = `<div class="py-16 text-center text-sm text-zinc-400">
+        box.innerHTML = `<div class="py-16 text-center text-sm font-medium text-zinc-500">
           No positions in this view.
           ${(state.search || state.track !== 'all' || state.domain !== 'all')
-            ? '<br/><button onclick="clearFilters()" class="mt-2 text-xs text-sky-700 hover:underline">Clear filters</button>' : ''}
+            ? '<br/><button onclick="clearFilters()" class="mt-2 text-xs text-sky-700 font-medium hover:underline">Clear filters</button>' : ''}
         </div>`;
         $('#result-count').textContent = '0 results';
         return;
@@ -245,7 +245,7 @@
     // ---------- detail pane ---------- //
     function renderEmptyDetail(){
       state.detailId = null;
-      $('#detail').innerHTML = `<div class="h-full flex items-center justify-center text-sm text-zinc-400">Nothing selected.</div>`;
+      $('#detail').innerHTML = `<div class="h-full flex items-center justify-center text-sm text-zinc-500">Nothing selected.</div>`;
     }
 
     function selectRow(i, skipScroll){
@@ -275,7 +275,10 @@
       const t = tier(d.match_score);
       const url = safeUrl(d.url);
       const matched = Object.keys(d.match?.matched_terms || {}).sort();
-      const missing = Object.keys(d.match?.missing_terms || {}).sort();
+      const missingAll = Object.keys(d.match?.missing_terms || {}).sort();
+      const MISS_CAP = 6;
+      const missing = missingAll.slice(0, MISS_CAP);
+      const missingExtra = missingAll.length - missing.length;
       const when = fmtRel(d.date_posted || d.date_discovered);
       const chipsOf = (terms, cls) => terms.map(t2 =>
         `<span class="text-[11px] px-2 py-0.5 rounded-full border font-mono ${cls}">${esc(t2)}</span>`).join('');
@@ -284,8 +287,8 @@
       <div class="p-6 max-w-2xl">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
-            <h2 class="text-lg font-semibold tracking-tight leading-snug">${esc(d.title)}</h2>
-            <div class="text-sm text-zinc-500 mt-1">${esc(d.company)} · ${esc(d.location || 'Location TBD')}</div>
+            <h2 class="text-lg font-semibold tracking-tight leading-snug text-zinc-900">${esc(d.title)}</h2>
+            <div class="text-sm font-medium text-zinc-700 mt-1">${esc(d.company)} · ${esc(d.location || 'Location TBD')}</div>
             <div class="flex gap-1.5 mt-2.5">
               ${chip(String(d.track||'').replace('_',' '))}${chip(d.domain || 'General')}
               ${d.is_remote ? chip('remote') : ''}${d.term ? chip(d.term) : ''}
@@ -297,14 +300,15 @@
 
         <div class="mt-5 bg-white border border-zinc-200 rounded-lg p-4">
           <div class="flex items-center justify-between mb-2.5">
-            <span class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Match fit</span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Match fit</span>
             <span class="font-mono text-sm tabular-nums text-zinc-900 flex items-center gap-1.5">
               <span class="w-2 h-2 rounded-full ${t.dot}"></span>${d.match_score}% · ${t.label}
             </span>
           </div>
           <div class="flex flex-wrap gap-1.5">${chipsOf(matched, 'border-emerald-200 bg-emerald-50 text-emerald-700')}</div>
-          ${missing.length ? `<div class="text-[11px] text-zinc-400 mt-3 mb-1.5">Not mentioned in this role</div>
-          <div class="flex flex-wrap gap-1.5">${chipsOf(missing, 'border-zinc-200 text-zinc-400')}</div>` : ''}
+          ${missingAll.length ? `<div class="text-xs font-medium text-zinc-500 mt-3 mb-1.5">Not mentioned in this role</div>
+          <div class="flex flex-wrap gap-1.5" id="missing-chips">${chipsOf(missing, 'bg-zinc-100 text-zinc-500 border border-zinc-200 font-medium')}
+            ${missingExtra > 0 ? `<span onclick="toggleMissing('${d.id}')" class="text-xs text-zinc-500 hover:text-zinc-800 underline cursor-pointer self-center" id="missing-toggle">+${missingExtra} more</span>` : ''}</div>` : ''}
         </div>
 
         <div class="mt-4 flex items-center gap-2">
@@ -314,18 +318,29 @@
           <button onclick="genPrep('${d.id}')" class="ml-auto px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-300 text-zinc-700 hover:bg-zinc-100 transition">Generate Prep <kbd class="light">p</kbd></button>
         </div>
 
-        ${d.summary ? `<div class="mt-5"><h3 class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Interview prep</h3>
-          <p class="text-[13px] leading-relaxed text-zinc-700">${esc(d.summary)}</p></div>` : ''}
-        ${d.tailored_bullets ? `<div class="mt-4"><h3 class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Key alignment</h3>
-          <div class="text-[13px] leading-relaxed text-zinc-700 whitespace-pre-line">${esc(d.tailored_bullets)}</div></div>` : ''}
+        ${d.summary ? `<div class="mt-5"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">Interview prep</h3>
+          <p class="text-sm leading-relaxed text-zinc-800">${esc(d.summary)}</p></div>` : ''}
+        ${d.tailored_bullets ? `<div class="mt-4"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">Key alignment</h3>
+          <div class="text-sm leading-relaxed text-zinc-800 whitespace-pre-line">${esc(d.tailored_bullets)}</div></div>` : ''}
 
         <div class="mt-5">
-          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">
-            Description <span class="normal-case font-normal text-zinc-300">· posted ${when || 'unknown'} · via ${esc(d.source || 'unknown')}</span>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+            Description <span class="normal-case font-medium text-zinc-500">· posted ${when || 'unknown'} · via ${esc(d.source || 'unknown')}</span>
           </h3>
-          <div class="max-h-72 overflow-y-auto bg-white border border-zinc-200 rounded-lg p-4 text-[13px] leading-relaxed text-zinc-600 whitespace-pre-line">${esc(d.raw_description || 'No description captured for this role.')}</div>
+          <div class="max-h-72 overflow-y-auto bg-white border border-zinc-200 rounded-lg p-4 text-sm leading-relaxed text-zinc-700 whitespace-pre-line">${esc(d.raw_description || 'No description captured for this role.')}</div>
         </div>
       </div>`;
+    }
+
+    // Expand the capped 'missing terms' chip set in place.
+    function toggleMissing(id){
+      const d = detailCache.get(id);
+      const box = document.getElementById('missing-chips');
+      if (!d || !box) return;
+      const all = Object.keys(d.match?.missing_terms || {}).sort();
+      box.innerHTML = all.map(t2 =>
+        `<span class="text-[11px] px-2 py-0.5 rounded-full font-mono bg-zinc-100 text-zinc-500 border border-zinc-200 font-medium">${esc(t2)}</span>`
+      ).join('') + `<span onclick="renderDetail(detailCache.get('${id}'))" class="text-xs text-zinc-500 hover:text-zinc-800 underline cursor-pointer self-center">show less</span>`;
     }
 
     async function genPrep(id){
