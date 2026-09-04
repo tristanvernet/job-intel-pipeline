@@ -8,29 +8,32 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist@latest/index.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist-mono@latest/index.css" />
   <style>
-    :root { color-scheme: light; }
+    :root { color-scheme: dark; }
     body { font-family:'Geist',ui-sans-serif,system-ui,-apple-system,sans-serif; }
     .font-mono, code, kbd { font-family:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace !important; }
     kbd { font-size:10px; background:#27272a; border:1px solid #3f3f46; border-radius:4px; padding:1px 5px; color:#d4d4d8; }
-    kbd.light { background:#f4f4f5; border-color:#d4d4d8; color:#52525b; }
+    kbd.light { background:#3f3f46; border-color:#52525b; color:#e4e4e7; }
     ::-webkit-scrollbar { width:10px; height:10px; }
-    ::-webkit-scrollbar-thumb { background:#d4d4d8; border-radius:6px; }
-    .row { height:44px; cursor:pointer; border-left:4px solid transparent; }
-    .row:hover { background:#fafafa; }
-    .row.active { background:rgba(244,244,245,.8); border-left:4px solid #18181b; box-shadow: inset 0 0 0 1px #e4e4e7; }
-    .skel { height:44px; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #f4f4f5; }
-    .skel > div { background:#f4f4f5; border-radius:4px; height:12px; animation:pulse 1.2s ease-in-out infinite; }
+    ::-webkit-scrollbar-track { background:#09090b; }
+    ::-webkit-scrollbar-thumb { background:#3f3f46; border-radius:6px; border:2px solid #09090b; }
+    ::-webkit-scrollbar-thumb:hover { background:#52525b; }
+    .row { height:44px; cursor:pointer; border-left:4px solid transparent; transition:background .12s ease; }
+    .row:hover { background:rgba(24,24,27,.6); }
+    .row.active { background:rgba(39,39,42,.8); border-left:4px solid #38bdf8; box-shadow: inset 0 0 0 1px rgba(63,63,70,.6); }
+    .skel { height:44px; display:flex; align-items:center; gap:12px; padding:0 16px; border-bottom:1px solid #18181b; }
+    .skel > div { background:#27272a; border-radius:4px; height:12px; animation:pulse 1.2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-    .row-leaving { transition: height .15s ease, opacity .15s ease; height:0 !important; opacity:0; overflow:hidden; }
+    #errbar { transition: opacity .3s ease, transform .3s ease; }
+    #errbar.fade { opacity:0; transform: translate(-50%,-4px); pointer-events:none; }
     @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; } }
   </style>
 </head>
-<body class="h-screen flex flex-col overflow-hidden antialiased bg-[#f4f5f7] text-zinc-900">
+<body class="h-screen flex flex-col overflow-hidden antialiased bg-zinc-950 text-zinc-100">
 
   <!-- COMMAND BAR -->
-  <header class="h-11 shrink-0 bg-[#09090b] text-zinc-100 flex items-center gap-3 px-4 border-b border-zinc-800">
-    <div class="w-6 h-6 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-[10px] font-mono font-semibold">JI</div>
-    <h1 class="text-[13px] font-semibold tracking-tight">Job Intel Hub</h1>
+  <header class="h-11 shrink-0 bg-zinc-900/90 border-b border-zinc-800 backdrop-blur flex items-center gap-3 px-4">
+    <div class="w-6 h-6 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-[10px] font-mono font-semibold text-zinc-100">JI</div>
+    <h1 class="text-[13px] font-semibold tracking-tight text-zinc-100">Job Intel Hub</h1>
     <span class="text-zinc-700">·</span>
     <span id="pipeline-status" class="text-[11px] font-mono tabular-nums text-zinc-400 truncate">connecting…</span>
     <div class="ml-auto hidden lg:flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
@@ -41,15 +44,15 @@
   </header>
 
   <!-- TOOLBAR -->
-  <div class="shrink-0 bg-white border-b border-zinc-200">
+  <div class="shrink-0 bg-zinc-950 border-b border-zinc-800">
     <div class="flex items-center gap-1 px-4 pt-2" id="status-tabs" role="tablist">
       <button data-status="new"      class="tab" role="tab">Inbox</button>
       <button data-status="applied"  class="tab" role="tab">Applied</button>
       <button data-status="saved"    class="tab" role="tab">Saved</button>
       <button data-status="archived" class="tab" role="tab">Archived</button>
       <div class="ml-auto pb-1.5 flex items-center gap-2">
-        <label class="text-[11px] text-zinc-400 font-mono">sort</label>
-        <select id="sort" class="text-xs border border-zinc-300 rounded-md px-1.5 py-1 bg-white text-zinc-800 font-medium focus:outline-none focus:border-zinc-500">
+        <label class="text-[11px] text-zinc-400 font-mono font-medium">sort</label>
+        <select id="sort" class="text-xs border border-zinc-700 rounded-md px-1.5 py-1 bg-zinc-900 text-zinc-200 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/40 cursor-pointer">
           <option value="score_desc">Best match</option>
           <option value="date_desc">Newest</option>
         </select>
@@ -57,18 +60,18 @@
     </div>
     <div class="flex items-center gap-2 px-4 py-2">
       <div class="relative w-72">
-        <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
+        <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
         <input id="search" type="text" placeholder="Search company, title, location…" autocomplete="off"
-          class="w-full bg-white border border-zinc-300 rounded-md pl-8 pr-3 py-1.5 text-[13px] text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-500 transition" />
+          class="w-full bg-zinc-900 border border-zinc-700 rounded-md pl-8 pr-3 py-1.5 text-[13px] text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition" />
       </div>
-      <span id="result-count" class="text-[11px] font-mono tabular-nums text-zinc-400"></span>
-      <span class="w-px h-4 bg-zinc-200"></span>
+      <span id="result-count" class="text-[11px] font-mono tabular-nums text-zinc-400 font-medium"></span>
+      <span class="w-px h-4 bg-zinc-800"></span>
       <div class="flex gap-1" id="track-filters">
         <button data-track="all"        class="track-btn">All</button>
         <button data-track="internship" class="track-btn">Intern</button>
         <button data-track="full_time"  class="track-btn">Full-Time</button>
       </div>
-      <span class="w-px h-4 bg-zinc-200"></span>
+      <span class="w-px h-4 bg-zinc-800"></span>
       <div class="flex gap-1" id="domain-filters">
         <button data-domain="all"     class="dom-btn">All</button>
         <button data-domain="SWE"     class="dom-btn">SWE</button>
@@ -80,19 +83,19 @@
 
   <!-- SPLIT PANE -->
   <main class="flex flex-1 min-h-0">
-    <section id="stream" class="w-[45%] min-w-[340px] overflow-y-auto bg-white border-r border-zinc-200" role="listbox" aria-label="Job stream">
+    <section id="stream" class="w-[45%] min-w-[340px] overflow-y-auto bg-zinc-950 border-r border-zinc-800" role="listbox" aria-label="Job stream">
       <div id="rows"></div>
     </section>
-    <aside id="detail" class="flex-1 overflow-y-auto bg-[#fafafa]" aria-label="Job detail">
-      <div class="h-full flex items-center justify-center text-sm text-zinc-500 p-8 text-center">
-        Select a role to inspect it.<br/><span class="text-xs text-zinc-500 font-mono mt-1 block">j / k to navigate</span>
+    <aside id="detail" class="flex-1 overflow-y-auto bg-zinc-950" aria-label="Job detail">
+      <div class="h-full flex items-center justify-center text-sm text-zinc-400 p-8 text-center">
+        Select a role to inspect it.<br/><span class="text-xs text-zinc-400 font-mono font-medium mt-1 block">j / k to navigate</span>
       </div>
     </aside>
   </main>
 
   <!-- UNDO TOAST + ERROR BANNER -->
-  <div id="toast" class="hidden fixed bottom-4 right-4 z-50 flex items-center gap-3 px-3.5 py-2 rounded-lg bg-zinc-900 text-zinc-100 border border-zinc-700 text-[13px]"></div>
-  <div id="errbar" class="hidden fixed top-14 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-rose-50 border border-rose-300 text-rose-700 text-[13px] font-medium"></div>
+  <div id="toast" class="hidden fixed bottom-4 right-4 z-50 flex items-center gap-3 px-3.5 py-2 rounded-lg bg-zinc-800 text-zinc-100 border border-zinc-700 text-[13px]"></div>
+  <div id="errbar" class="fade hidden fixed top-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2 rounded-lg bg-rose-950/90 border border-rose-800 text-rose-200 text-[13px] font-medium"></div>
 
   <script>
     // ------------------------------------------------------------------ //
@@ -103,6 +106,7 @@
     const detailCache = new Map();
     const undoStack = [];
     let toastTimer = null;
+    let errorTimeout = null;
 
     // ---------- utils ---------- //
     const $ = s => document.querySelector(s);
@@ -127,16 +131,26 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     }
+
+    // ---------- error banner: auto-dismiss after 4s, manual ×, fade ---------- //
     function showError(msg){
-      const el = $('#errbar'); el.textContent = msg; el.classList.remove('hidden');
+      clearTimeout(errorTimeout);
+      const el = $('#errbar');
+      el.innerHTML = `<span>${esc(msg)}</span>
+        <button onclick="clearError()" class="text-rose-300 hover:text-rose-100 font-bold leading-none" aria-label="Dismiss error">×</button>`;
+      el.classList.remove('hidden', 'fade');
+      errorTimeout = setTimeout(() => el.classList.add('fade'), 4000);
     }
-    function clearError(){ $('#errbar').classList.add('hidden'); }
+    function clearError(){
+      clearTimeout(errorTimeout);
+      $('#errbar').classList.add('fade');
+    }
 
     // ---------- toast / undo ---------- //
     function showToast(msg, onUndo){
       const t = $('#toast');
       t.innerHTML = `<span>${esc(msg)}</span>` +
-        (onUndo ? `<button id="toast-undo" class="font-mono text-[11px] px-2 py-0.5 rounded border border-zinc-600 hover:bg-zinc-800 transition"><kbd>z</kbd> Undo</button>` : '');
+        (onUndo ? `<button id="toast-undo" class="font-mono text-[11px] px-2 py-0.5 rounded border border-zinc-600 hover:bg-zinc-700 transition"><kbd>z</kbd> Undo</button>` : '');
       t.classList.remove('hidden');
       if (onUndo) $('#toast-undo').onclick = () => { hideToast(); onUndo(); };
       clearTimeout(toastTimer);
@@ -146,9 +160,9 @@
 
     // ---------- score tiers ---------- //
     function tier(score){
-      if (score >= 90) return { dot:'bg-emerald-500', label:'Excellent' };
-      if (score >= 75) return { dot:'bg-sky-500',     label:'Strong' };
-      return { dot:'bg-zinc-300', label:'Fair' };
+      if (score >= 90) return { dot:'bg-emerald-400', label:'Excellent' };
+      if (score >= 75) return { dot:'bg-sky-400',     label:'Strong' };
+      return { dot:'bg-zinc-500', label:'Fair' };
     }
 
     // ---------- stats / telemetry ---------- //
@@ -175,16 +189,16 @@
     }
 
     function chip(text){
-      return `<span class="text-[10px] px-1.5 py-px rounded border border-zinc-200 text-zinc-500 font-mono shrink-0">${esc(text)}</span>`;
+      return `<span class="text-[10px] px-1.5 py-px rounded bg-zinc-900 text-zinc-300 border border-zinc-800 font-medium font-mono shrink-0">${esc(text)}</span>`;
     }
 
     function renderRows(){
       const box = $('#rows');
       if (!state.jobs.length){
-        box.innerHTML = `<div class="py-16 text-center text-sm font-medium text-zinc-500">
+        box.innerHTML = `<div class="py-16 text-center text-sm font-medium text-zinc-400">
           No positions in this view.
           ${(state.search || state.track !== 'all' || state.domain !== 'all')
-            ? '<br/><button onclick="clearFilters()" class="mt-2 text-xs text-sky-700 font-medium hover:underline">Clear filters</button>' : ''}
+            ? '<br/><button onclick="clearFilters()" class="mt-2 text-xs text-sky-400 font-medium hover:underline">Clear filters</button>' : ''}
         </div>`;
         $('#result-count').textContent = '0 results';
         return;
@@ -192,13 +206,13 @@
       box.innerHTML = state.jobs.map((j, i) => {
         const t = tier(j.match_score);
         const when = fmtRel(j.date_posted || j.date_discovered);
-        return `<div class="row ${i === state.cursor ? 'active' : ''} flex items-center gap-2.5 px-4 border-b border-zinc-100"
+        return `<div class="row ${i === state.cursor ? 'active' : ''} flex items-center gap-2.5 px-4 border-b border-zinc-900"
                      role="option" aria-selected="${i === state.cursor}" data-id="${j.id}" onclick="selectRow(${i})">
           <span class="w-2 h-2 rounded-full shrink-0 ${t.dot}" title="Match ${j.match_score}% · ${t.label}"></span>
-          <span class="w-32 truncate text-[13px] text-zinc-500 shrink-0">${esc(j.company)}</span>
-          <span class="flex-1 truncate text-[13px] font-medium text-zinc-900">${esc(j.title)}</span>
+          <span class="w-32 truncate text-[13px] text-zinc-300 shrink-0">${esc(j.company)}</span>
+          <span class="flex-1 truncate text-[13px] font-medium text-zinc-100">${esc(j.title)}</span>
           <span class="hidden md:flex gap-1">${chip(String(j.track||'').replace('_',' '))}${chip(j.domain || 'General')}</span>
-          <span class="w-8 text-right text-[11px] font-mono tabular-nums text-zinc-400 shrink-0">${when}</span>
+          <span class="w-8 text-right text-[11px] font-mono tabular-nums text-zinc-400 font-medium shrink-0">${when}</span>
         </div>`;
       }).join('');
       $('#result-count').textContent = `${fmt(state.jobs.length)} result${state.jobs.length === 1 ? '' : 's'}`;
@@ -207,24 +221,24 @@
     function paintTabs(){
       document.querySelectorAll('.tab').forEach(b => {
         const on = b.dataset.status === state.status;
-        b.className = 'tab px-3 py-2 text-[13px] font-medium border-b-2 -mb-px transition ' +
-          (on ? 'border-zinc-900 text-zinc-900' : 'border-transparent text-zinc-500 hover:text-zinc-800');
+        b.className = 'tab px-3 py-2 text-[13px] border-b-2 -mb-px transition ' +
+          (on ? 'border-sky-500 text-zinc-100 font-medium' : 'border-transparent text-zinc-400 hover:text-zinc-200');
         if (!b.querySelector('.cnt'))
           b.insertAdjacentHTML('beforeend', ' <span class="cnt font-mono tabular-nums text-[11px] opacity-60"></span>');
       });
       const pill = on => on
-        ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 text-white transition'
-        : 'px-2.5 py-1 rounded-md text-xs font-medium text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition';
+        ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 text-zinc-100 border border-zinc-600 transition'
+        : 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 text-zinc-400 border border-zinc-800 hover:border-zinc-700 transition';
       document.querySelectorAll('.track-btn').forEach(b => b.className = pill(b.dataset.track === state.track));
       document.querySelectorAll('.dom-btn').forEach(b => b.className = pill(b.dataset.domain === state.domain));
     }
 
     async function loadJobs(keepCursor){
-      clearError();
       try {
         const p = new URLSearchParams({ status: state.status, track: state.track, domain: state.domain, sort: state.sort });
         if (state.search.trim()) p.set('search', state.search.trim());
         state.jobs = await api('/api/jobs?' + p.toString());
+        clearError();  // stale banner from a failed attempt must not linger
         state.cursor = keepCursor ? Math.min(state.cursor, Math.max(0, state.jobs.length - 1)) : 0;
         state.loading = false;
         renderRows();
@@ -245,7 +259,7 @@
     // ---------- detail pane ---------- //
     function renderEmptyDetail(){
       state.detailId = null;
-      $('#detail').innerHTML = `<div class="h-full flex items-center justify-center text-sm text-zinc-500">Nothing selected.</div>`;
+      $('#detail').innerHTML = `<div class="h-full flex items-center justify-center text-sm text-zinc-400">Nothing selected.</div>`;
     }
 
     function selectRow(i, skipScroll){
@@ -264,7 +278,7 @@
       state.detailId = id;
       let d = detailCache.get(id);
       if (!d) {
-        try { d = await api(`/api/jobs/${id}`); detailCache.set(id, d); }
+        try { d = await api(`/api/jobs/${id}`); detailCache.set(id, d); clearError(); }
         catch (e) { showError('Could not load job detail.'); return; }
       }
       if (state.detailId !== id) return;  // cursor moved on while fetching
@@ -287,47 +301,47 @@
       <div class="p-6 max-w-2xl">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
-            <h2 class="text-lg font-semibold tracking-tight leading-snug text-zinc-900">${esc(d.title)}</h2>
-            <div class="text-sm font-medium text-zinc-700 mt-1">${esc(d.company)} · ${esc(d.location || 'Location TBD')}</div>
+            <h2 class="text-lg font-semibold tracking-tight leading-snug text-zinc-100">${esc(d.title)}</h2>
+            <div class="text-sm text-zinc-300 mt-1">${esc(d.company)} · ${esc(d.location || 'Location TBD')}</div>
             <div class="flex gap-1.5 mt-2.5">
               ${chip(String(d.track||'').replace('_',' '))}${chip(d.domain || 'General')}
               ${d.is_remote ? chip('remote') : ''}${d.term ? chip(d.term) : ''}
             </div>
           </div>
           ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer"
-             class="shrink-0 px-3 py-1.5 rounded-md text-xs font-semibold text-zinc-900 border border-zinc-300 hover:bg-zinc-100 transition">View Posting ↗</a>` : ''}
+             class="shrink-0 px-3 py-1.5 rounded-md text-xs font-semibold text-zinc-100 bg-zinc-900 border border-zinc-700 hover:bg-zinc-800 transition">View Posting ↗</a>` : ''}
         </div>
 
-        <div class="mt-5 bg-white border border-zinc-200 rounded-lg p-4">
+        <div class="mt-5 bg-zinc-900/60 border border-zinc-800 rounded-lg p-4">
           <div class="flex items-center justify-between mb-2.5">
-            <span class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Match fit</span>
-            <span class="font-mono text-sm tabular-nums text-zinc-900 flex items-center gap-1.5">
+            <span class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium">Match fit</span>
+            <span class="font-mono text-sm tabular-nums text-zinc-100 flex items-center gap-1.5">
               <span class="w-2 h-2 rounded-full ${t.dot}"></span>${d.match_score}% · ${t.label}
             </span>
           </div>
-          <div class="flex flex-wrap gap-1.5">${chipsOf(matched, 'border-emerald-200 bg-emerald-50 text-emerald-700')}</div>
-          ${missingAll.length ? `<div class="text-xs font-medium text-zinc-500 mt-3 mb-1.5">Not mentioned in this role</div>
-          <div class="flex flex-wrap gap-1.5" id="missing-chips">${chipsOf(missing, 'bg-zinc-100 text-zinc-500 border border-zinc-200 font-medium')}
-            ${missingExtra > 0 ? `<span onclick="toggleMissing('${d.id}')" class="text-xs text-zinc-500 hover:text-zinc-800 underline cursor-pointer self-center" id="missing-toggle">+${missingExtra} more</span>` : ''}</div>` : ''}
+          <div class="flex flex-wrap gap-1.5">${chipsOf(matched, 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50')}</div>
+          ${missingAll.length ? `<div class="text-xs text-zinc-400 font-medium mt-3 mb-1.5">Not mentioned in this role</div>
+          <div class="flex flex-wrap gap-1.5" id="missing-chips">${chipsOf(missing, 'bg-zinc-900/80 text-zinc-500 border-zinc-800/80')}
+            ${missingExtra > 0 ? `<span onclick="toggleMissing('${d.id}')" class="text-xs text-zinc-400 hover:text-zinc-200 underline cursor-pointer self-center" id="missing-toggle">+${missingExtra} more</span>` : ''}</div>` : ''}
         </div>
 
         <div class="mt-4 flex items-center gap-2">
-          <button onclick="setStatus('${d.id}','applied')" class="px-3 py-1.5 rounded-md text-xs font-semibold bg-zinc-900 text-white hover:bg-zinc-700 transition">Mark Applied <kbd class="light">a</kbd></button>
-          <button onclick="setStatus('${d.id}','saved')"   class="px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-300 text-zinc-700 hover:bg-zinc-100 transition">Save <kbd class="light">s</kbd></button>
-          <button onclick="setStatus('${d.id}','archived')" class="px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-300 text-zinc-700 hover:bg-zinc-100 transition">Dismiss <kbd class="light">x</kbd></button>
-          <button onclick="genPrep('${d.id}')" class="ml-auto px-3 py-1.5 rounded-md text-xs font-medium border border-zinc-300 text-zinc-700 hover:bg-zinc-100 transition">Generate Prep <kbd class="light">p</kbd></button>
+          <button onclick="setStatus('${d.id}','applied')" class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm transition">Mark Applied <kbd>a</kbd></button>
+          <button onclick="setStatus('${d.id}','saved')"   class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Save <kbd>s</kbd></button>
+          <button onclick="setStatus('${d.id}','archived')" class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Dismiss <kbd>x</kbd></button>
+          <button onclick="genPrep('${d.id}')" class="ml-auto px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Generate Prep <kbd>p</kbd></button>
         </div>
 
-        ${d.summary ? `<div class="mt-5"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">Interview prep</h3>
-          <p class="text-sm leading-relaxed text-zinc-800">${esc(d.summary)}</p></div>` : ''}
-        ${d.tailored_bullets ? `<div class="mt-4"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">Key alignment</h3>
-          <div class="text-sm leading-relaxed text-zinc-800 whitespace-pre-line">${esc(d.tailored_bullets)}</div></div>` : ''}
+        ${d.summary ? `<div class="mt-5"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">Interview prep</h3>
+          <p class="text-sm leading-relaxed text-zinc-300">${esc(d.summary)}</p></div>` : ''}
+        ${d.tailored_bullets ? `<div class="mt-4"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">Key alignment</h3>
+          <div class="text-sm leading-relaxed text-zinc-300 whitespace-pre-line">${esc(d.tailored_bullets)}</div></div>` : ''}
 
         <div class="mt-5">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
-            Description <span class="normal-case font-medium text-zinc-500">· posted ${when || 'unknown'} · via ${esc(d.source || 'unknown')}</span>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">
+            Description <span class="normal-case text-zinc-400 font-medium">· posted ${when || 'unknown'} · via ${esc(d.source || 'unknown')}</span>
           </h3>
-          <div class="max-h-72 overflow-y-auto bg-white border border-zinc-200 rounded-lg p-4 text-sm leading-relaxed text-zinc-700 whitespace-pre-line">${esc(d.raw_description || 'No description captured for this role.')}</div>
+          <div class="max-h-72 overflow-y-auto bg-zinc-900/60 border border-zinc-800 rounded-lg p-4 text-sm leading-relaxed text-zinc-300 whitespace-pre-line">${esc(d.raw_description || 'No description captured for this role.')}</div>
         </div>
       </div>`;
     }
@@ -339,8 +353,8 @@
       if (!d || !box) return;
       const all = Object.keys(d.match?.missing_terms || {}).sort();
       box.innerHTML = all.map(t2 =>
-        `<span class="text-[11px] px-2 py-0.5 rounded-full font-mono bg-zinc-100 text-zinc-500 border border-zinc-200 font-medium">${esc(t2)}</span>`
-      ).join('') + `<span onclick="renderDetail(detailCache.get('${id}'))" class="text-xs text-zinc-500 hover:text-zinc-800 underline cursor-pointer self-center">show less</span>`;
+        `<span class="text-[11px] px-2 py-0.5 rounded-full font-mono bg-zinc-900/80 text-zinc-500 border border-zinc-800/80">${esc(t2)}</span>`
+      ).join('') + `<span onclick="renderDetail(detailCache.get('${id}'))" class="text-xs text-zinc-400 hover:text-zinc-200 underline cursor-pointer self-center">show less</span>`;
     }
 
     async function genPrep(id){
@@ -354,7 +368,7 @@
         await loadDetail(id);
       } catch (e) {
         showError('Prep generation failed.');
-        if (btn) { btn.disabled = false; btn.innerHTML = 'Generate Prep <kbd class="light">p</kbd>'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Generate Prep <kbd>p</kbd>'; }
       }
     }
 
@@ -376,6 +390,7 @@
       if (state.jobs.length) selectRow(state.cursor, true); else renderEmptyDetail();
       loadStats();
       showToast(`Marked ${newStatus}`, undo);
+      clearError();
 
       // Background sync; revert on failure.
       api(`/api/jobs/${id}/status`, {
@@ -396,6 +411,7 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: u.prevStatus }),
         });
+        clearError();
       } catch (e) { showError('Undo failed — refresh to resync.'); return; }
       u.job.status = u.prevStatus;
       detailCache.delete(u.id);
