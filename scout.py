@@ -12,7 +12,11 @@ from db import insert_job
 from classifier import is_unwanted_role, classify_track, classify_domain
 
 # Primary boards that tolerate steady scraping.
-SITES = ["indeed", "glassdoor", "zip_recruiter"]
+SITES = ["indeed"]
+# Glassdoor's search API requires a geocoded country/city. Blank, "Remote",
+# or odd formats return HTTP 400. Always pass a real place; for remote-only
+# searches keep this anchor and set is_remote=True instead of location="Remote".
+LOCATION_ANCHOR = "United States"
 # LinkedIn is aggressive about rate limits, so it is fetched separately with a
 # smaller cap and random back-off, and isolated in try/except.
 LINKEDIN_LIMIT = 15
@@ -143,6 +147,30 @@ def _ingest(jobs_df, default_track: str, counters: dict):
         # source boundary; they are not mislabeled as malformed rows.
 
 
+def _jobspy_options(site: str, query: str, *, results_wanted: int, is_remote: bool = False) -> dict:
+    """Build scrape_jobs kwargs with a Glassdoor-safe location.
+
+    Never pass location="Remote" (or blank): Glassdoor geocoding 400s. Remote
+    filtering is the is_remote flag, always with LOCATION_ANCHOR as the place.
+    """
+    location = LOCATION_ANCHOR.strip() or "United States"
+    if location.lower() == "remote":
+        location = "United States"
+        is_remote = True
+    options = dict(
+        site_name=[site],
+        search_term=query,
+        location=location,
+        country_indeed="USA",
+        is_remote=bool(is_remote),
+        results_wanted=results_wanted,
+        hours_old=168 if site == "linkedin" else 72,
+    )
+    if site == "linkedin":
+        options["linkedin_fetch_description"] = False
+    return options
+
+
 def run_scout(results_per_query: int = 10):
     outcomes = []
     blocked_sites = set()
@@ -153,13 +181,12 @@ def run_scout(results_per_query: int = 10):
             counters = dict.fromkeys(("fetched", "added", "skipped", "duplicates", "rejected"), 0)
             result = {"source": site, "query": item["query"], "status": "ok", "error": None}
             try:
-                options = dict(site_name=[site], search_term=item["query"],
-                               location="United States", country_indeed="USA",
-                               results_wanted=LINKEDIN_LIMIT if site == "linkedin" else results_per_query,
-                               hours_old=168 if site == "linkedin" else 72)
+                options = _jobspy_options(
+                    site, item["query"],
+                    results_wanted=LINKEDIN_LIMIT if site == "linkedin" else results_per_query,
+                )
                 if site == "linkedin":
                     time.sleep(random.uniform(2.0, 5.0))
-                    options["linkedin_fetch_description"] = False
                 jobs_df = scrape_jobs(**options)
                 _ingest(jobs_df, item["default_track"], counters)
                 if counters["rejected"]:
@@ -170,14 +197,15 @@ def run_scout(results_per_query: int = 10):
                     blocked_sites.add(site)  # no repeated attempts after 403/429
                 elif counters["added"]:
                     result["status"] = "partial"
-                print(f"  [{site}] {result['status']}: {exc}")
+                print(f"[{site}] {result['status']}: {exc}")
             result.update(counters, inserted=counters["added"])
             outcomes.append(result)
             time.sleep(random.uniform(1.0, 3.0))
+
     report = summarize(outcomes)
     print(f"Scout complete: {report}")
     return report
 
 
 if __name__ == "__main__":
-    run_scout(results_per_query=6)
+    run_scout()

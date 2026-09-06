@@ -248,3 +248,18 @@ def test_github_block_is_visible_in_worker_and_notifies_failure(database, monkey
     assert report["status"] == "blocked"
     assert report["sources"][0]["sources"][0]["status"] == "blocked"
     assert messages and "blocked" in messages[0]
+
+
+def test_jobspy_options_never_send_remote_as_location():
+    opts = scout._jobspy_options("glassdoor", '"Junior Software Engineer"', results_wanted=5)
+    assert opts["location"] == "United States"
+    assert opts["location"].lower() != "remote"
+    assert opts["is_remote"] is False
+    assert opts["country_indeed"] == "USA"
+
+
+def test_jobspy_options_remote_flag_keeps_country_anchor():
+    opts = scout._jobspy_options("glassdoor", '"Junior Software Engineer"',
+                                 results_wanted=5, is_remote=True)
+    assert opts["location"] == "United States"
+    assert opts["is_remote"] is True
