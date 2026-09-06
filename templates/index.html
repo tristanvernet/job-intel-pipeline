@@ -36,7 +36,7 @@
     <h1 class="text-[13px] font-semibold tracking-tight text-zinc-100">Job Intel Hub</h1>
     <span class="text-zinc-700">·</span>
     <span id="pipeline-status" class="text-[11px] font-mono tabular-nums text-zinc-400 truncate">connecting…</span>
-    <div class="ml-auto hidden lg:flex items-center gap-2 text-[11px] text-zinc-500 font-mono">
+    <div class="ml-auto hidden lg:flex items-center gap-2 text-[11px] text-zinc-400 font-mono">
       <kbd>j</kbd><kbd>k</kbd> move <span class="text-zinc-700">·</span> <kbd>a</kbd> apply <span class="text-zinc-700">·</span>
       <kbd>s</kbd> save <span class="text-zinc-700">·</span> <kbd>x</kbd> dismiss <span class="text-zinc-700">·</span>
       <kbd>z</kbd> undo <span class="text-zinc-700">·</span> <kbd>/</kbd> search
@@ -60,9 +60,9 @@
     </div>
     <div class="flex items-center gap-2 px-4 py-2">
       <div class="relative w-72">
-        <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
+        <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" stroke-linecap="round"/></svg>
         <input id="search" type="text" placeholder="Search company, title, location…" autocomplete="off"
-          class="w-full bg-zinc-900 border border-zinc-700 rounded-md pl-8 pr-3 py-1.5 text-[13px] text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition" />
+          class="w-full bg-zinc-900 border border-zinc-700 rounded-md pl-8 pr-3 py-1.5 text-[13px] text-zinc-100 placeholder-zinc-400 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition" />
       </div>
       <span id="result-count" class="text-[11px] font-mono tabular-nums text-zinc-400 font-medium"></span>
       <span class="w-px h-4 bg-zinc-800"></span>
@@ -101,17 +101,46 @@
     // ------------------------------------------------------------------ //
     const state = {
       status:'new', track:'all', domain:'all', search:'', sort:'score_desc',
-      jobs:[], cursor:0, detailId:null, loading:true,
+      jobs:[], selectedId:null, loading:true,
     };
     const detailCache = new Map();
     const undoStack = [];
+    const pendingMutations = new Map();
+    let operationSequence = 0;
+    let listGeneration = 0;
+    let listController = null;
+    let detailGeneration = 0;
     let toastTimer = null;
     let errorTimeout = null;
 
     // ---------- utils ---------- //
     const $ = s => document.querySelector(s);
+    const viewKey = () => JSON.stringify([state.status, state.track, state.domain, state.search.trim(), state.sort]);
+    const selectedIndex = () => state.jobs.findIndex(j => String(j.id) === state.selectedId);
+    const selectedJob = () => state.jobs.find(j => String(j.id) === state.selectedId);
     function esc(s){ return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-    function safeUrl(u){ return /^https?:\/\//i.test(u || '') ? u : null; }
+    function safeUrl(value){
+      try {
+        const raw = String(value);
+        // URL parsing otherwise silently strips tabs/newlines and edge controls.
+        if (/[\u0000-\u001f\u007f-\u009f]/u.test(raw)) return null;
+        const url = new URL(raw);
+        return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+      } catch { return null; }
+    }
+    function postingLink(value){
+      const url = safeUrl(value);
+      const el = document.createElement(url ? 'a' : 'span');
+      el.textContent = url ? 'View Posting ↗' : 'Posting unavailable';
+      el.className = 'shrink-0 px-3 py-1.5 rounded-md text-xs font-semibold text-zinc-100 bg-zinc-900 border border-zinc-700';
+      if (url) {
+        el.href = url;
+        el.target = '_blank';
+        el.rel = 'noopener noreferrer';
+        el.classList.add('hover:bg-zinc-800', 'transition');
+      }
+      return el;
+    }
     function fmt(n){ return (typeof n === 'number' ? n : 0).toLocaleString('en-US'); }
     function parseTs(s){
       if (!s) return null;
@@ -137,7 +166,7 @@
       clearTimeout(errorTimeout);
       const el = $('#errbar');
       el.innerHTML = `<span>${esc(msg)}</span>
-        <button onclick="clearError()" class="text-rose-300 hover:text-rose-100 font-bold leading-none" aria-label="Dismiss error">×</button>`;
+        <button data-action="clear-error" class="text-rose-300 hover:text-rose-100 font-bold leading-none" aria-label="Dismiss error">×</button>`;
       el.classList.remove('hidden', 'fade');
       errorTimeout = setTimeout(() => el.classList.add('fade'), 4000);
     }
@@ -198,7 +227,7 @@
         box.innerHTML = `<div class="py-16 text-center text-sm font-medium text-zinc-400">
           No positions in this view.
           ${(state.search || state.track !== 'all' || state.domain !== 'all')
-            ? '<br/><button onclick="clearFilters()" class="mt-2 text-xs text-sky-400 font-medium hover:underline">Clear filters</button>' : ''}
+            ? '<br/><button data-action="clear-filters" class="mt-2 text-xs text-sky-400 font-medium hover:underline">Clear filters</button>' : ''}
         </div>`;
         $('#result-count').textContent = '0 results';
         return;
@@ -206,8 +235,8 @@
       box.innerHTML = state.jobs.map((j, i) => {
         const t = tier(j.match_score);
         const when = fmtRel(j.date_posted || j.date_discovered);
-        return `<div class="row ${i === state.cursor ? 'active' : ''} flex items-center gap-2.5 px-4 border-b border-zinc-900"
-                     role="option" aria-selected="${i === state.cursor}" data-id="${j.id}" onclick="selectRow(${i})">
+        return `<div class="row ${String(j.id) === state.selectedId ? 'active' : ''} flex items-center gap-2.5 px-4 border-b border-zinc-900"
+                     role="option" aria-selected="${String(j.id) === state.selectedId}" data-id="${esc(j.id)}">
           <span class="w-2 h-2 rounded-full shrink-0 ${t.dot}" title="Match ${j.match_score}% · ${t.label}"></span>
           <span class="w-32 truncate text-[13px] text-zinc-300 shrink-0">${esc(j.company)}</span>
           <span class="flex-1 truncate text-[13px] font-medium text-zinc-100">${esc(j.title)}</span>
@@ -224,7 +253,7 @@
         b.className = 'tab px-3 py-2 text-[13px] border-b-2 -mb-px transition ' +
           (on ? 'border-sky-500 text-zinc-100 font-medium' : 'border-transparent text-zinc-400 hover:text-zinc-200');
         if (!b.querySelector('.cnt'))
-          b.insertAdjacentHTML('beforeend', ' <span class="cnt font-mono tabular-nums text-[11px] opacity-60"></span>');
+          b.insertAdjacentHTML('beforeend', ' <span class="cnt font-mono tabular-nums text-[11px]"></span>');
       });
       const pill = on => on
         ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 text-zinc-100 border border-zinc-600 transition'
@@ -233,19 +262,55 @@
       document.querySelectorAll('.dom-btn').forEach(b => b.className = pill(b.dataset.domain === state.domain));
     }
 
-    async function loadJobs(keepCursor){
+    function invalidateList(){
+      listController?.abort();
+      ++listGeneration;
+      ++detailGeneration;
+      state.loading = true;
+      state.jobs = [];
+      $('#stream').setAttribute('aria-busy', 'true');
+      $('#result-count').textContent = 'Loading…';
+      skeleton();
+      $('#detail').innerHTML = '<div class="p-6 text-sm text-zinc-400">Loading view…</div>';
+    }
+
+    function reconcileSelection(preferredId = state.selectedId, fallbackIndex = 0){
+      const index = state.jobs.findIndex(j => String(j.id) === preferredId);
+      state.selectedId = index >= 0 ? preferredId : null;
+      renderRows();
+      if (state.jobs.length) selectRow(index >= 0 ? index : Math.min(fallbackIndex, state.jobs.length - 1));
+      else renderEmptyDetail();
+    }
+
+    async function loadJobs(keepSelection = false){
+      const preferredId = keepSelection ? state.selectedId : null;
+      invalidateList();
+      const generation = listGeneration;
+      const key = viewKey();
+      const controller = new AbortController();
+      listController = controller;
       try {
+        // Rows are disabled while loading. Wait for our outstanding writes so
+        // the fetched view cannot resurrect a still-pending optimistic action.
+        await Promise.allSettled([...pendingMutations.values()]);
+        if (generation !== listGeneration || controller.signal.aborted) return;
         const p = new URLSearchParams({ status: state.status, track: state.track, domain: state.domain, sort: state.sort });
         if (state.search.trim()) p.set('search', state.search.trim());
-        state.jobs = await api('/api/jobs?' + p.toString());
+        const jobs = await api('/api/jobs?' + p.toString(), { signal: controller.signal });
+        if (generation !== listGeneration || key !== viewKey()) return;
+        state.jobs = jobs;
         clearError();  // stale banner from a failed attempt must not linger
-        state.cursor = keepCursor ? Math.min(state.cursor, Math.max(0, state.jobs.length - 1)) : 0;
         state.loading = false;
-        renderRows();
-        if (state.jobs.length) selectRow(state.cursor, true); else renderEmptyDetail();
+        $('#stream').setAttribute('aria-busy', 'false');
+        reconcileSelection(preferredId);
         loadStats();
       } catch (e) {
+        if (generation !== listGeneration || e.name === 'AbortError') return;
         state.loading = false;
+        $('#stream').setAttribute('aria-busy', 'false');
+        $('#rows').innerHTML = '<div class="p-6 text-sm text-zinc-400">Could not load this view. <button data-action="retry-list" class="text-sky-400">Retry</button></div>';
+        $('#result-count').textContent = 'Unavailable';
+        renderEmptyDetail();
         showError('Could not load jobs. Is the server running?');
       }
     }
@@ -258,13 +323,18 @@
 
     // ---------- detail pane ---------- //
     function renderEmptyDetail(){
-      state.detailId = null;
+      state.selectedId = null;
+      ++detailGeneration;
+      document.querySelectorAll('.row').forEach(r => {
+        r.classList.remove('active');
+        r.setAttribute('aria-selected', 'false');
+      });
       $('#detail').innerHTML = `<div class="h-full flex items-center justify-center text-sm text-zinc-400">Nothing selected.</div>`;
     }
 
     function selectRow(i, skipScroll){
-      if (i < 0 || i >= state.jobs.length) return;
-      state.cursor = i;
+      if (state.loading || i < 0 || i >= state.jobs.length) return;
+      state.selectedId = String(state.jobs[i].id);
       document.querySelectorAll('.row').forEach((r, ri) => {
         r.classList.toggle('active', ri === i);
         r.setAttribute('aria-selected', ri === i ? 'true' : 'false');
@@ -275,19 +345,31 @@
     }
 
     async function loadDetail(id){
-      state.detailId = id;
+      id = String(id);
+      if (state.loading || state.selectedId !== id) return;
+      const generation = ++detailGeneration;
       let d = detailCache.get(id);
       if (!d) {
-        try { d = await api(`/api/jobs/${id}`); detailCache.set(id, d); clearError(); }
-        catch (e) { showError('Could not load job detail.'); return; }
+        $('#detail').innerHTML = '<div class="p-6 text-sm text-zinc-400">Loading job…</div>';
+        try {
+          d = await api(`/api/jobs/${encodeURIComponent(id)}`);
+          if (generation !== detailGeneration || state.selectedId !== id || state.loading) return;
+          detailCache.set(id, d);
+        } catch (e) {
+          if (generation === detailGeneration && state.selectedId === id) {
+            $('#detail').innerHTML = '<div class="p-6 text-sm text-zinc-400">Could not load job detail.</div>';
+            showError('Could not load job detail.');
+          }
+          return;
+        }
       }
-      if (state.detailId !== id) return;  // cursor moved on while fetching
+      if (generation !== detailGeneration || state.selectedId !== id || state.loading) return;
       renderDetail(d);
     }
 
     function renderDetail(d){
+      if (!d || state.loading || String(d.id) !== state.selectedId) return;
       const t = tier(d.match_score);
-      const url = safeUrl(d.url);
       const matched = Object.keys(d.match?.matched_terms || {}).sort();
       const missingAll = Object.keys(d.match?.missing_terms || {}).sort();
       const MISS_CAP = 6;
@@ -308,8 +390,7 @@
               ${d.is_remote ? chip('remote') : ''}${d.term ? chip(d.term) : ''}
             </div>
           </div>
-          ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer"
-             class="shrink-0 px-3 py-1.5 rounded-md text-xs font-semibold text-zinc-100 bg-zinc-900 border border-zinc-700 hover:bg-zinc-800 transition">View Posting ↗</a>` : ''}
+          <span id="posting-link" class="shrink-0"></span>
         </div>
 
         <div class="mt-5 bg-zinc-900/60 border border-zinc-800 rounded-lg p-4">
@@ -321,15 +402,15 @@
           </div>
           <div class="flex flex-wrap gap-1.5">${chipsOf(matched, 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50')}</div>
           ${missingAll.length ? `<div class="text-xs text-zinc-400 font-medium mt-3 mb-1.5">Not mentioned in this role</div>
-          <div class="flex flex-wrap gap-1.5" id="missing-chips">${chipsOf(missing, 'bg-zinc-900/80 text-zinc-500 border-zinc-800/80')}
-            ${missingExtra > 0 ? `<span onclick="toggleMissing('${d.id}')" class="text-xs text-zinc-400 hover:text-zinc-200 underline cursor-pointer self-center" id="missing-toggle">+${missingExtra} more</span>` : ''}</div>` : ''}
+          <div class="flex flex-wrap gap-1.5" id="missing-chips">${chipsOf(missing, 'bg-zinc-900/80 text-zinc-400 border-zinc-800/80')}
+            ${missingExtra > 0 ? `<button type="button" data-action="missing" aria-expanded="false" aria-controls="missing-chips" class="text-xs text-zinc-400 hover:text-zinc-200 underline cursor-pointer self-center" id="missing-toggle">+${missingExtra} more</button>` : ''}</div>` : ''}
         </div>
 
         <div class="mt-4 flex items-center gap-2">
-          <button onclick="setStatus('${d.id}','applied')" class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm transition">Mark Applied <kbd>a</kbd></button>
-          <button onclick="setStatus('${d.id}','saved')"   class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Save <kbd>s</kbd></button>
-          <button onclick="setStatus('${d.id}','archived')" class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Dismiss <kbd>x</kbd></button>
-          <button onclick="genPrep('${d.id}')" class="ml-auto px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Generate Prep <kbd>p</kbd></button>
+          <button data-action="applied" class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 text-zinc-950 hover:bg-white shadow-sm transition">Mark Applied <kbd>a</kbd></button>
+          <button data-action="saved"   class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Save <kbd>s</kbd></button>
+          <button data-action="archived" class="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Dismiss <kbd>x</kbd></button>
+          <button data-action="prep" class="ml-auto px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Generate Prep <kbd>p</kbd></button>
         </div>
 
         ${d.summary ? `<div class="mt-5"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">Interview prep</h3>
@@ -344,28 +425,30 @@
           <div class="max-h-72 overflow-y-auto bg-zinc-900/60 border border-zinc-800 rounded-lg p-4 text-sm leading-relaxed text-zinc-300 whitespace-pre-line">${esc(d.raw_description || 'No description captured for this role.')}</div>
         </div>
       </div>`;
+      $('#detail').dataset.id = String(d.id);
+      $('#posting-link').replaceChildren(postingLink(d.url));
     }
 
     // Expand the capped 'missing terms' chip set in place.
     function toggleMissing(id){
       const d = detailCache.get(id);
       const box = document.getElementById('missing-chips');
-      if (!d || !box) return;
+      if (!d || !box || state.loading || String(id) !== state.selectedId) return;
       const all = Object.keys(d.match?.missing_terms || {}).sort();
       box.innerHTML = all.map(t2 =>
-        `<span class="text-[11px] px-2 py-0.5 rounded-full font-mono bg-zinc-900/80 text-zinc-500 border border-zinc-800/80">${esc(t2)}</span>`
-      ).join('') + `<span onclick="renderDetail(detailCache.get('${id}'))" class="text-xs text-zinc-400 hover:text-zinc-200 underline cursor-pointer self-center">show less</span>`;
+        `<span class="text-[11px] px-2 py-0.5 rounded-full font-mono bg-zinc-900/80 text-zinc-400 border border-zinc-800/80">${esc(t2)}</span>`
+      ).join('') + `<button type="button" data-action="missing-less" aria-expanded="true" aria-controls="missing-chips" class="text-xs text-zinc-400 hover:text-zinc-200 underline cursor-pointer self-center">show less</button>`;
     }
 
-    async function genPrep(id){
-      const btn = event?.target;
+    async function genPrep(id, btn){
+      if (state.loading || String(id) !== state.selectedId) return;
       if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
       try {
-        const r = await api(`/api/jobs/${id}/prep`, { method: 'POST' });
+        const r = await api(`/api/jobs/${encodeURIComponent(id)}/prep`, { method: 'POST' });
         detailCache.delete(id);
         const j = state.jobs.find(x => String(x.id) === String(id));
         if (j) { j.summary = r.summary; j.tailored_bullets = r.bullets.map(b => '- ' + b).join('\n'); }
-        await loadDetail(id);
+        if (state.selectedId === String(id) && !state.loading) await loadDetail(id);
       } catch (e) {
         showError('Prep generation failed.');
         if (btn) { btn.disabled = false; btn.innerHTML = 'Generate Prep <kbd>p</kbd>'; }
@@ -373,56 +456,126 @@
     }
 
     // ---------- optimistic triage + undo ---------- //
-    function setStatus(id, newStatus){
-      const idx = state.jobs.findIndex(j => String(j.id) === String(id));
-      if (idx === -1) return;
-      const job = state.jobs[idx];
-      const prevStatus = job.status || state.status;
+    function trackMutation(id, promise){
+      pendingMutations.set(id, promise);
+      promise.finally(() => {
+        if (pendingMutations.get(id) === promise) pendingMutations.delete(id);
+      });
+      return promise;
+    }
 
-      // Optimistic local mutation.
-      undoStack.push({ id, prevStatus, job, idx });
-      job.status = newStatus;
-      if (newStatus !== state.status) state.jobs.splice(idx, 1);
-      state.cursor = Math.min(state.cursor, Math.max(0, state.jobs.length - 1));
-      detailCache.delete(id);
-      renderRows();
+    function removeUndo(operationId){
+      const index = undoStack.findIndex(op => op.operationId === operationId);
+      if (index >= 0) undoStack.splice(index, 1);
+    }
 
-      if (state.jobs.length) selectRow(state.cursor, true); else renderEmptyDetail();
-      loadStats();
-      showToast(`Marked ${newStatus}`, undo);
-      clearError();
+    function reconcileOperation(op, status, restoreFocus = false){
+      detailCache.delete(op.id);
+      if (state.loading) return; // the pending view fetch waits for this write
+      if (op.viewKey !== viewKey()) {
+        // Let the server apply search (including LIKE wildcards), category and
+        // sorting rules; never splice a previous view's snapshot into this one.
+        loadJobs(true);
+        return;
+      }
+      const currentIndex = state.jobs.findIndex(j => String(j.id) === op.id);
+      const job = { ...op.job, status };
+      if (status === state.status) {
+        if (currentIndex >= 0) state.jobs[currentIndex] = job;
+        else state.jobs.splice(Math.min(op.index, state.jobs.length), 0, job);
+      } else if (currentIndex >= 0) {
+        state.jobs.splice(currentIndex, 1);
+      }
+      reconcileSelection(restoreFocus && status === state.status ? op.id : state.selectedId, op.index);
+    }
 
-      // Background sync; revert on failure.
-      api(`/api/jobs/${id}/status`, {
+    function postStatus(id, status){
+      return api(`/api/jobs/${encodeURIComponent(id)}/status`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      }).catch(() => {
-        showError('Status update failed — change reverted.');
-        undo();
+        body: JSON.stringify({ status }),
       });
     }
 
-    async function undo(){
-      const u = undoStack.pop();
-      if (!u) { showToast('Nothing to undo'); return; }
+    function setStatus(id, newStatus){
+      id = String(id);
+      if (state.loading || pendingMutations.has(id)) return;
+      const index = state.jobs.findIndex(j => String(j.id) === id);
+      if (index < 0) return;
+      const job = state.jobs[index];
+      if (job.status === newStatus) return;
+      const op = {
+        operationId: ++operationSequence, id,
+        beforeStatus: job.status, targetStatus: newStatus,
+        viewKey: viewKey(), index, job: { ...job }, undoing: false,
+      };
+      undoStack.push(op);
+      reconcileOperation(op, newStatus);
+      showToast(`Marked ${newStatus}`, undo);
+      clearError();
+      op.promise = postStatus(id, newStatus).then(() => {
+        loadStats();
+        return true;
+      }).catch(() => {
+        // This callback owns only this operation, even if later jobs changed.
+        removeUndo(op.operationId);
+        reconcileOperation(op, op.beforeStatus);
+        showError('Status update failed — local change reverted. Refresh to verify server state.');
+        return false;
+      });
+      return trackMutation(id, op.promise);
+    }
+
+    function undo(){
+      if (state.loading) return;
+      const op = undoStack[undoStack.length - 1];
+      if (!op) { showToast('Nothing to undo'); return; }
+      if (op.undoing) return;
+      op.undoing = true;
       hideToast();
-      try {
-        await api(`/api/jobs/${u.id}/status`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: u.prevStatus }),
-        });
-        clearError();
-      } catch (e) { showError('Undo failed — refresh to resync.'); return; }
-      u.job.status = u.prevStatus;
-      detailCache.delete(u.id);
-      if (u.prevStatus === state.status && !state.jobs.some(j => String(j.id) === String(u.id))) {
-        state.jobs.splice(Math.min(u.idx, state.jobs.length), 0, u.job);
-      }
-      renderRows();
-      loadStats();
+      const promise = (async () => {
+        // Undo must follow the original write, never race it on the server.
+        if (!await op.promise) return false;
+        try {
+          await postStatus(op.id, op.beforeStatus);
+          removeUndo(op.operationId);
+          reconcileOperation(op, op.beforeStatus, true);
+          loadStats();
+          clearError();
+          return true;
+        } catch (e) {
+          showError('Undo failed — retry undo or refresh to resync.');
+          return false; // retain this exact history entry for retry
+        } finally {
+          op.undoing = false;
+        }
+      })();
+      return trackMutation(op.id, promise);
     }
 
     // ---------- wiring ---------- //
+    $('#rows').addEventListener('click', e => {
+      const action = e.target.closest('[data-action]')?.dataset.action;
+      if (action === 'clear-filters') { clearFilters(); return; }
+      if (action === 'retry-list') { loadJobs(); return; }
+      const row = e.target.closest('.row');
+      if (!row || state.loading) return;
+      selectRow(state.jobs.findIndex(j => String(j.id) === row.dataset.id));
+    });
+    $('#detail').addEventListener('click', e => {
+      const button = e.target.closest('button[data-action]');
+      const id = $('#detail').dataset.id;
+      if (!button || state.loading || id !== state.selectedId) return;
+      switch (button.dataset.action) {
+        case 'applied': case 'saved': case 'archived':
+          setStatus(id, button.dataset.action); break;
+        case 'prep': genPrep(id, button); break;
+        case 'missing': toggleMissing(id); break;
+        case 'missing-less': renderDetail(detailCache.get(id)); break;
+      }
+    });
+    $('#errbar').addEventListener('click', e => {
+      if (e.target.closest('[data-action="clear-error"]')) clearError();
+    });
     document.querySelectorAll('.tab').forEach(b => b.onclick = () => { state.status = b.dataset.status; paintTabs(); loadJobs(); });
     document.querySelectorAll('.track-btn').forEach(b => b.onclick = () => { state.track = b.dataset.track; paintTabs(); loadJobs(); });
     document.querySelectorAll('.dom-btn').forEach(b => b.onclick = () => { state.domain = b.dataset.domain; paintTabs(); loadJobs(); });
@@ -433,6 +586,7 @@
     searchEl.addEventListener('input', e => {
       state.search = e.target.value;
       clearTimeout(searchTimer);
+      invalidateList(); // invalidate immediately, including the debounce window
       searchTimer = setTimeout(() => loadJobs(), 200);
     });
 
@@ -443,11 +597,12 @@
         if (e.target === searchEl && e.key === 'Escape') searchEl.blur();
         return;
       }
-      const cur = state.jobs[state.cursor];
+      const cur = state.loading ? null : selectedJob();
+      const cursor = selectedIndex();
       switch (e.key) {
         case '/': e.preventDefault(); searchEl.focus(); return;
-        case 'j': selectRow(Math.min(state.jobs.length - 1, state.cursor + 1)); return;
-        case 'k': selectRow(Math.max(0, state.cursor - 1)); return;
+        case 'j': selectRow(Math.min(state.jobs.length - 1, cursor + 1)); return;
+        case 'k': selectRow(Math.max(0, cursor - 1)); return;
         case 'z': undo(); return;
         case 'Escape': renderEmptyDetail(); return;
         case 'Enter': {

@@ -114,3 +114,14 @@ def test_profile_writer_does_not_truncate_another_writers_temporary(tmp_path):
     with pytest.raises(FileExistsError):
         sync_profile.save_profile({"new": True}, path)
     assert temporary.read_text() == "another writer"
+
+
+def test_frontend_state_regressions():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the frontend state regression harness")
+    result = subprocess.run(
+        [node, "--test", "test_ui_state.cjs"],
+        cwd=Path(__file__).parent, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
