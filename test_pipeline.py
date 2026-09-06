@@ -59,6 +59,31 @@ def test_classify_track_unclear():
     assert term is None
 
 
+@pytest.mark.parametrize("title", [
+    "Internal Software Engineer", "International Operations", "Internet Services",
+])
+def test_internship_word_boundaries(title):
+    assert classify_track(title)[0] != "internship"
+
+
+@pytest.mark.parametrize("title", [
+    "Software Engineer Intern", "Software Engineering Interns", "Software Internship",
+    "Software Internships", "Software Co-op", "Software Co op", "Software Coop",
+])
+def test_undated_internship_has_no_invented_term(title):
+    assert classify_track(title) == ("internship", None)
+
+
+@pytest.mark.parametrize("description,term", [
+    ("Summer 2028", "Summer 2028"), ("Spring '27", "Spring 2027"),
+    ("Fall 2026", "Fall 2026"), ("Winter ’29", "Winter 2029"),
+    ("Summer internship", "Summer"),
+    ("Summer opportunities for Summer 2028", "Summer 2028"),
+])
+def test_internship_term_uses_explicit_evidence(description, term):
+    assert classify_track("Software Intern", description) == ("internship", term)
+
+
 @pytest.mark.parametrize("title,expected", [
     ("Machine Learning Intern", "AI/ML"),
     ("Platform Engineer", "Systems"),
@@ -105,6 +130,44 @@ def test_parse_markdown_sublisting_inherits_company():
     assert subs[0]["company"] == "Acme"            # inherited via ↳
     assert subs[0]["is_remote"] is True
     assert "🛂" not in subs[0]["title"]
+
+
+def test_closed_parent_sublisting_uses_new_company():
+    content = """| Company A | Software Engineer | NY | https://example.com/a |
+| Company B | Software Engineer | NY | 🔒 |
+| ↳ | Backend Engineer Intern | NY | https://example.com/b |
+"""
+    jobs, skipped = parse_markdown_table(content, "internship", "Summer 2027")
+    assert [(j["company"], j["title"]) for j in jobs] == [
+        ("Company A", "Software Engineer"), ("Company B", "Backend Engineer Intern"),
+    ]
+    assert skipped == 1
+    assert jobs[1]["term"] == "Summer 2027"
+
+
+@pytest.mark.parametrize("separator", ["\n", "\n## Another section\n", "\nIntroductory prose\n"])
+def test_markdown_company_context_resets_between_tables(separator):
+    content = ("| Company A | Software Engineer | NY | https://example.com/a |\n"
+               + separator + "| ↳ | Backend Engineer Intern | NY | https://example.com/b |")
+    jobs, skipped = parse_markdown_table(content, "internship", "Summer 2027")
+    assert len(jobs) == 1
+    assert skipped == 1
+
+
+def test_html_company_context_and_table_boundaries():
+    content = """<table><tr class="job"><td>A</td><td>Software Engineer</td><td>NY</td><td>https://example.com/a</td></tr>
+<tr><td>B</td><td>Software Engineer</td><td>NY</td><td>🔒</td></tr>
+<tr><td>↳</td><td>Software Intern</td><td>NY</td><td>https://example.com/b</td></tr></table>
+<h2>Another section</h2><table><tr><td>↳</td><td>Software Intern</td><td>NY</td><td>https://example.com/c</td></tr></table>"""
+    jobs, skipped = parse_markdown_table(content, "internship", "Summer 2027")
+    assert [j["company"] for j in jobs] == ["A", "B"]
+    assert skipped == 2
+
+
+def test_explicit_intern_term_overrides_source_hint():
+    content = "| A | Software Intern Summer 2028 | NY | https://example.com/a |"
+    jobs, _ = parse_markdown_table(content, "internship", "Summer 2027")
+    assert jobs[0]["term"] == "Summer 2028"
 
 
 def test_parse_markdown_skips_senior_locked_and_offtrack():

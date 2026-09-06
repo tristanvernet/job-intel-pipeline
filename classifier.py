@@ -29,16 +29,17 @@ def classify_track(title: str, description: str = "") -> Tuple[str, Optional[str
     full_text = f"{title_lower} {desc_lower}"
     
     # 1. Internship Detection
-    if any(k in title_lower for k in ["intern", "internship", "co-op", "coop"]):
-        term = "Summer 2026 / General"
-        if "summer 2027" in full_text or "summer '27" in full_text:
-            term = "Summer 2027"
-        elif "spring 2027" in full_text or "spring '27" in full_text:
-            term = "Spring 2027"
-        elif "fall 2026" in full_text or "fall '26" in full_text:
-            term = "Fall 2026"
-        elif "summer" in full_text:
-            term = "Summer"
+    if re.search(r"\b(?:intern(?:ship)?s?|co[- ]?op)\b", title_lower):
+        term = None
+        season = re.search(
+            r"\b(spring|summer|fall|autumn|winter)\s+(20\d{2}|['’]\d{2})\b",
+            full_text,
+        ) or re.search(r"\b(spring|summer|fall|autumn|winter)\b", full_text)
+        if season:
+            term = season[1].title()
+            if season.lastindex == 2:
+                year = season[2]
+                term += " " + ("20" + year[1:] if year[0] in "'’" else year)
         return "internship", term
 
     # 2. Full-Time Entry Level Detection

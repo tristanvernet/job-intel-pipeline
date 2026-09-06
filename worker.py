@@ -15,6 +15,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+from collector_status import failure_status, summarize
 import sys
 import time
 from pathlib import Path
@@ -32,13 +34,20 @@ import notify
 import schedule as schedule_mod
 
 
-def _run_step(name: str, fn: Callable[[], None]) -> None:
-    """Run one collector, isolating failures so one bad source can't abort the run."""
-    print(f"\n=== [worker] running {name} ===")
+def _run_step(name: str, fn: Callable) -> dict:
+    """Isolate sources and preserve their failure/count information."""
     try:
-        fn()
-    except Exception as e:  # noqa: BLE001 - we log and continue by design
-        print(f"[worker] {name} failed: {e}", file=sys.stderr)
+        result = fn()
+        if isinstance(result, list):
+            result = summarize(result)
+        elif result is None:  # legacy collectors without a report
+            result = summarize([])
+    except Exception as exc:
+        result = {"status": failure_status(exc), "fetched": 0, "inserted": 0,
+                  "rejected": 0, "error": str(exc)}
+    result = {"source": name, **result}
+    print(json.dumps(result, sort_keys=True))
+    return result
 
 
 def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[str, object]:
@@ -64,17 +73,18 @@ def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[st
         before = db.all_job_ids()
         started = time.time()
 
+        results = []
         if not skip_github:
             import fetch_github
-            _run_step("fetch_github", fetch_github.run_github_fetch)
+            results.append(_run_step("fetch_github", fetch_github.run_github_fetch))
         if not skip_scout:
             import scout
-            _run_step("scout", scout.run_scout)
+            results.append(_run_step("scout", scout.run_scout))
 
         after = db.all_job_ids()
         new_ids = sorted(after - before)
         elapsed = time.time() - started
-        return {"new_count": len(new_ids), "new_ids": new_ids, "elapsed": elapsed}
+        return {**summarize(results), "new_count": len(new_ids), "new_ids": new_ids, "elapsed": elapsed}
     finally:
         if lock_fd is not None:
             lock_fd.close()  # closing the fd releases the flock
@@ -111,8 +121,13 @@ def run(interval: Optional[str] = None, notify_enabled: bool = True,
     print(f"\n[worker] {count} genuinely new role(s) inserted "
           f"in {summary['elapsed']:.1f}s")
 
-    if notify_enabled:
-        notify.notify_new_roles(count, window=_window_label(schedule))
+    if notify_enabled and not summary.get("skipped"):
+        if summary.get("status", "ok") == "ok":
+            notify.notify_new_roles(count, window=_window_label(schedule))
+        else:
+            notify.send_notification(
+                f"Collection {summary['status']}: {count} new roles. Check worker logs for source errors."
+            )
     return summary
 
 
@@ -145,13 +160,13 @@ def main(argv: Optional[list] = None) -> int:
     if args.test:
         run_test_notification()
         return 0
-    run(
+    result = run(
         interval=args.interval,
         notify_enabled=not args.no_notify,
         skip_github=args.skip_github,
         skip_scout=args.skip_scout,
     )
-    return 0
+    return 0 if result.get("status", "ok") == "ok" else 1
 
 
 if __name__ == "__main__":

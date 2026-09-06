@@ -24,7 +24,9 @@ The pipeline runs continuously: ingestion feeds pull early-career roles from cur
 
 Continuous early-career aggregation from curated early-career indexes and general board scrapers. Every payload is normalized on the way in: markdown artifacts stripped, junk URL parameters removed, and unified into a single schema with deterministic IDs (`company|title|location` SHA-256, symbols preserved so `C++ Engineer` and `C# Engineer` never collide).
 
-The store is SQLite in WAL mode (`PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=15000`) with `check_same_thread=False`. Background scrapers write while the FastAPI service reads, without lock contention or threadpool errors.
+The store uses SQLite WAL with per-operation connections that close explicitly. Write transactions use a 100ms busy timeout and up to five retries with exponential jitter within an approximately two-second contention budget. API mutations commit before returning success and return HTTP 503 with `Retry-After` when busy retries are exhausted. Startup migrations check `PRAGMA user_version` inside `BEGIN IMMEDIATE` and commit or roll back as one unit.
+
+Collectors report `ok`, `partial`, `blocked`, or `failed` with fetched, inserted, and rejected counts. Invalid rows are isolated; infrastructure errors remain source failures. Reported 403/429 errors stop further queries to that board for the run. Failed or partial runs produce failure-aware notifications and a nonzero worker exit status.
 
 ### Intelligence and matching
 

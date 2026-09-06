@@ -1,5 +1,11 @@
 import random
 import time
+import sqlite3
+from urllib.parse import urlsplit
+
+import pandas as pd
+from pandas.api.types import is_scalar
+from collector_status import failure_status, summarize
 
 from jobspy import scrape_jobs
 from db import insert_job
@@ -44,9 +50,15 @@ def row_to_payload(row: dict, default_track: str = "unclear"):
     Pure function: no network, no DB. `row` is a plain dict (e.g. a DataFrame
     row converted via `.to_dict()`), so it is trivially testable with fixtures.
     """
+    clean = {}
+    for key, value in row.items():
+        if not is_scalar(value):
+            raise ValueError(f"Non-scalar field: {key}")
+        clean[key] = None if pd.isna(value) else value
+    row = clean
     title = str(row.get("title") or "").strip()
     if not title:
-        return None
+        raise ValueError("Missing title")
 
     # Gate 1: excluded seniority / non-tech disciplines
     if is_unwanted_role(title):
@@ -66,12 +78,23 @@ def row_to_payload(row: dict, default_track: str = "unclear"):
         else:
             return None
 
+    url = str(row.get("job_url") or "").strip()
+    remote = row.get("is_remote")
+    if remote is None:
+        remote = False
+    elif isinstance(remote, str):
+        if remote.lower() not in ("true", "false"):
+            raise ValueError("Invalid remote flag")
+        remote = remote.lower() == "true"
+    elif remote not in (True, False):
+        raise ValueError("Invalid remote flag")
+
     return {
         "company": str(row.get("company") or "Unknown").strip() or "Unknown",
         "title": title,
-        "url": str(row.get("job_url") or "").strip(),
+        "url": url,
         "location": str(row.get("location") or "USA").strip(),
-        "is_remote": bool(row.get("is_remote", False)),
+        "is_remote": bool(remote),
         "track": track,
         "term": term,
         "domain": domain,
@@ -81,67 +104,79 @@ def row_to_payload(row: dict, default_track: str = "unclear"):
     }
 
 
+def validate_payload(payload):
+    """Validate at the ingestion boundary; conversion remains independently usable."""
+    url = payload["url"]
+    parsed = urlsplit(url)
+    if (not url or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in url)
+            or parsed.scheme not in ("http", "https") or not parsed.hostname):
+        raise ValueError("Missing or invalid job URL")
+    _ = parsed.port  # reject malformed ports as well
+    if payload["track"] not in ("full_time", "internship", "unclear"):
+        raise ValueError("Invalid track")
+    if payload["domain"] not in ("SWE", "Systems", "AI/ML", "General"):
+        raise ValueError("Invalid domain")
+
+
 def _ingest(jobs_df, default_track: str, counters: dict):
     """Convert and insert a jobspy result frame; update shared counters."""
     if jobs_df is None or jobs_df.empty:
         return
+    for key in ("fetched", "added", "skipped", "duplicates", "rejected"):
+        counters.setdefault(key, 0)
+    counters["fetched"] += len(jobs_df)
     for _, row in jobs_df.iterrows():
-        payload = row_to_payload(row.to_dict(), default_track)
-        if payload is None:
-            counters["skipped"] += 1
-            continue
-        if insert_job(payload):
-            print(f"  + Added: [{payload['track'].upper()}] [{payload['domain']}] "
-                  f"{payload['company']} - {payload['title']} ({payload['source']})")
-            counters["added"] += 1
-        else:
-            counters["duplicates"] += 1
+        try:
+            payload = row_to_payload(row.to_dict(), default_track)
+            if payload is None:
+                counters["skipped"] += 1
+                continue
+            validate_payload(payload)
+            if insert_job(payload):
+                counters["added"] += 1
+            else:
+                counters["duplicates"] += 1
+        except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
+            counters["rejected"] += 1
+            print(f"  Rejected row: {exc}")
+        # Infrastructure failures (including exhausted BUSY) escape to the
+        # source boundary; they are not mislabeled as malformed rows.
 
 
 def run_scout(results_per_query: int = 10):
-    counters = {"added": 0, "skipped": 0, "duplicates": 0}
-
+    outcomes = []
+    blocked_sites = set()
     for item in SEARCH_QUERIES:
-        query = item["query"]
-        default_track = item["default_track"]
-        print(f"\n[Scout] Searching: {query}...")
-
-        # Primary boards (Indeed / Glassdoor / ZipRecruiter)
-        try:
-            jobs_df = scrape_jobs(
-                site_name=SITES,
-                search_term=query,
-                location="United States",
-                results_wanted=results_per_query,
-                hours_old=72,
-                country_indeed="USA",
-            )
-            _ingest(jobs_df, default_track, counters)
-        except Exception as e:
-            print(f"  Error querying primary boards for {query}: {e}")
-
-        # LinkedIn, isolated so a block here never stops the other boards.
-        try:
-            time.sleep(random.uniform(2.0, 5.0))  # polite jitter before LinkedIn
-            li_df = scrape_jobs(
-                site_name=["linkedin"],
-                search_term=query,
-                location="United States",
-                results_wanted=LINKEDIN_LIMIT,
-                hours_old=168,
-                linkedin_fetch_description=False,
-            )
-            _ingest(li_df, default_track, counters)
-        except Exception as e:
-            print(f"  [LinkedIn] skipped for '{query}' (likely rate-limited): {e}")
-
-        # Random delay between queries to avoid tripping rate limits.
-        time.sleep(random.uniform(1.0, 3.0))
-
-    print("\n==========================================")
-    print(f"Scout Complete: {counters['added']} added | {counters['skipped']} filtered out | "
-          f"{counters['duplicates']} duplicates.")
-    print("==========================================")
+        for site in [*SITES, "linkedin"]:
+            if site in blocked_sites:
+                continue
+            counters = dict.fromkeys(("fetched", "added", "skipped", "duplicates", "rejected"), 0)
+            result = {"source": site, "query": item["query"], "status": "ok", "error": None}
+            try:
+                options = dict(site_name=[site], search_term=item["query"],
+                               location="United States", country_indeed="USA",
+                               results_wanted=LINKEDIN_LIMIT if site == "linkedin" else results_per_query,
+                               hours_old=168 if site == "linkedin" else 72)
+                if site == "linkedin":
+                    time.sleep(random.uniform(2.0, 5.0))
+                    options["linkedin_fetch_description"] = False
+                jobs_df = scrape_jobs(**options)
+                _ingest(jobs_df, item["default_track"], counters)
+                if counters["rejected"]:
+                    result["status"] = "partial"
+            except Exception as exc:
+                result.update(status=failure_status(exc), error=str(exc))
+                if result["status"] == "blocked":
+                    blocked_sites.add(site)  # no repeated attempts after 403/429
+                elif counters["added"]:
+                    result["status"] = "partial"
+                print(f"  [{site}] {result['status']}: {exc}")
+            result.update(counters, inserted=counters["added"])
+            outcomes.append(result)
+            time.sleep(random.uniform(1.0, 3.0))
+    report = summarize(outcomes)
+    print(f"Scout complete: {report}")
+    return report
 
 
 if __name__ == "__main__":

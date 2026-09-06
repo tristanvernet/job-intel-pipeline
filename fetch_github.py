@@ -1,5 +1,8 @@
 import re
 import requests
+import sqlite3
+import json
+from collector_status import failure_status
 from db import insert_job
 from classifier import is_unwanted_role, classify_track, classify_domain
 
@@ -74,32 +77,44 @@ def _extract_url(*cells: str) -> str:
     return ""
 
 
-# Matches an HTML table row and its cells (SimplifyJobs' current format).
-_TR_PATTERN = re.compile(r"<tr>(.*?)</tr>", re.DOTALL | re.IGNORECASE)
+# Matches HTML table cells (SimplifyJobs' current format).
 _TD_PATTERN = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL | re.IGNORECASE)
 
 
 def _extract_cell_rows(content: str):
-    """Yield 4-cell rows (company, role, location, application) from a README.
+    """Yield rows in source order, with None marking table/section boundaries.
 
-    Supports BOTH the current HTML `<tr><td>` tables and legacy Markdown pipe
-    tables, so a format change on either side never silently drops every role.
+    Consume whole HTML rows before looking for Markdown rows, so HTML cell
+    content cannot be interpreted a second time as a Markdown table.
     """
-    rows = []
-    # HTML tables (header rows use <th> and are naturally excluded).
-    for tr in _TR_PATTERN.findall(content):
-        cells = _TD_PATTERN.findall(tr)
-        if len(cells) >= 4:
-            rows.append([c.strip() for c in cells[:4]])
-    # Legacy Markdown pipe tables.
-    for line in content.splitlines():
-        line = line.rstrip()
-        if not line.startswith("|"):
-            continue
-        parts = [p.strip() for p in line.split("|")[1:-1]]
-        if len(parts) >= 4:
-            rows.append(parts[:4])
-    return rows
+    def markdown_rows(text):
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("|"):
+                parts = [p.strip() for p in line.split("|")[1:-1]]
+                if len(parts) >= 4:
+                    yield parts[:4]
+                    continue
+            yield None
+
+    blocks = re.compile(
+        r"<table\b[^>]*>|</table\s*>|"
+        r"<h[1-6]\b[^>]*>.*?</h[1-6]\s*>|"
+        r"<tr\b[^>]*>.*?</tr\s*>", re.DOTALL | re.IGNORECASE
+    )
+    end = 0
+    for block in blocks.finditer(content):
+        gap = content[end:block.start()]
+        if gap.strip():
+            yield from markdown_rows(gap)
+        raw = block.group()
+        if re.match(r"<tr\b", raw, re.IGNORECASE):
+            cells = _TD_PATTERN.findall(raw)
+            yield [c.strip() for c in cells[:4]] if len(cells) >= 4 else None
+        else:
+            yield None
+        end = block.end()
+    yield from markdown_rows(content[end:])
 
 
 def parse_markdown_table(content: str, default_track: str, term_hint: str, stats: dict = None):
@@ -113,7 +128,7 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str, stats
     total data rows seen and skip reasons, so callers can print an audit.
     """
     payloads = []
-    last_company = ""
+    last_company = None
     total_rows = 0
     reasons = {
         "closed_locked": 0,
@@ -122,27 +137,31 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str, stats
         "unknown_domain": 0,
     }
 
-    for company_raw, role_raw, location_raw, link_raw in _extract_cell_rows(content):
+    for row in _extract_cell_rows(content):
+        if row is None:
+            last_company = None
+            continue
+        company_raw, role_raw, location_raw, link_raw = row
         # Skip header and separator rows (not counted as data rows)
         joined = f"{company_raw}{role_raw}".lower()
         if "company" in joined and "role" in joined:
+            last_company = None
             continue
         if company_raw and set(company_raw) <= set("-: "):
             continue
 
         total_rows += 1
 
-        # Skip closed/locked roles entirely
+        # Company context belongs to the table, including closed/filtered jobs.
+        company = _clean_text(company_raw)
+        if not company or _SUBLISTING_MARKER in company_raw:
+            company = last_company
+        else:
+            last_company = company
+
         if any(m in role_raw or m in link_raw for m in _CLOSED_MARKERS):
             reasons["closed_locked"] += 1
             continue
-
-        company = _clean_text(company_raw)
-        # Sub-listing: inherit the previous company
-        if not company or _SUBLISTING_MARKER in company_raw or company == "↳":
-            company = last_company
-        if company:
-            last_company = company
 
         title = _clean_text(role_raw)
         location = _clean_text(location_raw) or "Not specified"
@@ -167,6 +186,8 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str, stats
         track, term = classify_track(title, role_raw)
         if track == "unclear":
             track, term = default_track, term_hint
+        elif track == default_track and term is None:
+            term = term_hint or None
 
         payloads.append(
             {
@@ -200,56 +221,39 @@ def run_github_fetch():
     distinguish a genuinely empty source (ok=True, added=0) from a broken one
     (ok=False, error set) -- a 404/branch rename must never look like success.
     """
-    print("[GitHub Scout] Fetching curated early-career repositories...")
-    total_new = 0
-    total_skipped = 0
     outcomes = []
-
     for src in SOURCES:
-        name = src["url"].split("/")[-3]
-        print(f"  Fetching: {name} ({src['default_track']})...")
+        outcome = {"source": src["url"], "ok": False, "status": "ok",
+                   "fetched": 0, "inserted": 0, "added": 0,
+                   "rejected": 0, "skipped": 0, "error": None}
         try:
             resp = requests.get(src["url"], timeout=10)
-        except requests.RequestException as e:
-            print(f"    -> SOURCE FAILED (network): {e}")
-            outcomes.append({"source": name, "ok": False, "added": 0,
-                             "skipped": 0, "error": f"network: {e}"})
-            continue
-
-        if resp.status_code != 200:
-            print(f"    -> SOURCE FAILED: HTTP {resp.status_code} "
-                  f"(repo may use a different branch/path)")
-            outcomes.append({"source": name, "ok": False, "added": 0,
-                             "skipped": 0, "error": f"http {resp.status_code}"})
-            continue
-
-        stats = {}
-        payloads, skipped = parse_markdown_table(
-            resp.text, src["default_track"], src["term_hint"], stats=stats
-        )
-        added = sum(1 for p in payloads if insert_job(p))
-        dupes = len(payloads) - added
-        r = stats.get("reasons", {})
-        print(f"    -> Rows found in README : {stats.get('total_rows', 0)}")
-        print(f"    -> Inserted (new)       : {added}")
-        print(f"    -> Duplicates (existing): {dupes}")
-        print(f"    -> Skipped              : {skipped}")
-        print(f"         closed/locked           : {r.get('closed_locked', 0)}")
-        print(f"         missing company/url     : {r.get('missing_fields', 0)}")
-        print(f"         excluded level/discipline: {r.get('excluded_level_or_discipline', 0)}")
-        print(f"         unknown domain          : {r.get('unknown_domain', 0)}")
-        total_new += added
-        total_skipped += skipped
-        outcomes.append({"source": name, "ok": True, "added": added,
-                         "skipped": skipped, "error": None})
-
-    failed = [o for o in outcomes if not o["ok"]]
-    print("==========================================")
-    print(f"GitHub Scout Complete: {total_new} added to jobs.db")
-    if failed:
-        print(f"WARNING: {len(failed)}/{len(outcomes)} source(s) FAILED: "
-              + ", ".join(f"{o['source']} ({o['error']})" for o in failed))
-    print("==========================================")
+            if resp.status_code != 200:
+                outcome.update(status="blocked" if resp.status_code in (403, 429) else "failed",
+                               error=f"http {resp.status_code}")
+            else:
+                stats = {}
+                payloads, skipped = parse_markdown_table(
+                    resp.text, src["default_track"], src["term_hint"], stats=stats
+                )
+                outcome.update(fetched=stats["total_rows"], skipped=skipped)
+                if not stats["total_rows"]:
+                    outcome.update(status="failed", error="No recognizable source rows")
+                for payload in payloads:
+                    try:
+                        if insert_job(payload):
+                            outcome["inserted"] += 1
+                    except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
+                        outcome["rejected"] += 1
+                        outcome.update(status="partial", error=str(exc))
+        except Exception as exc:
+            status = failure_status(exc)
+            if outcome["inserted"] and status != "blocked":
+                status = "partial"
+            outcome.update(status=status, error=str(exc))
+        outcome.update(ok=outcome["status"] == "ok", added=outcome["inserted"])
+        outcomes.append(outcome)
+        print(json.dumps(outcome, sort_keys=True))
     return outcomes
 
 
