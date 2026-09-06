@@ -274,3 +274,59 @@ test('information-bearing muted tokens are legible without opacity reduction', (
     assert.ok((luminance('a1a1aa') + .05) / (luminance(background) + .05) >= 4.5);
   }
 });
+
+test('expired and dismissed undo entries cannot replay stale mutations', async () => {
+  const f = fixture();
+  f.run("setStatus('A', 'saved')");
+  f.writes()[0].resolve({ ok: true });
+  await tick();
+  f.run('undoStack[0].expiresAt = Date.now() - 1; undo();');
+  assert.equal(f.writes().length, 1);
+  assert.equal(f.run('undoStack.length'), 0);
+  f.run("setStatus('B', 'saved'); hideToast(); undo();");
+  assert.equal(f.run('undoStack.length'), 0);
+  assert.equal(f.writes().length, 2);
+});
+
+test('repeat, composing, and editable key events never triage', () => {
+  const f = fixture();
+  for (const event of [
+    { repeat: true }, { isComposing: true },
+    ...['INPUT', 'TEXTAREA', 'SELECT'].map(tagName => ({ target: { tagName } })),
+    { target: { tagName: 'SPAN', isContentEditable: true } },
+  ]) f.listeners.keydown({ key: 'a', target: { tagName: 'BODY' }, ...event });
+  assert.equal(f.writes().length, 0);
+});
+
+test('same-job prep patches fields without rebuilding the inspector', async () => {
+  const f = fixture();
+  const html = f.nodes.get('#detail').innerHTML;
+  f.run("genPrep('A')");
+  f.writes()[0].resolve({ summary: 'Prepared', bullets: ['Evidence'] });
+  await tick();
+  assert.equal(f.nodes.get('#detail').innerHTML, html);
+  assert.equal(f.nodes.get('#prep-summary').textContent, 'Prepared');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.run('state.selectedId'), 'A');
+});
+
+test('empty states distinguish filters, running, seed and inbox zero', () => {
+  const f = fixture();
+  f.run('state.jobs = []; state.pipelineTotal = 10; renderRows();');
+  assert.match(f.nodes.get('#rows').innerHTML, /Inbox zero/);
+  f.run('state.scraperRunning = true; renderRows();');
+  assert.match(f.nodes.get('#rows').innerHTML, /Collecting roles/);
+  assert.match(f.nodes.get('#rows').innerHTML, /animate-pulse/);
+  f.run("state.search = 'none'; renderRows();");
+  assert.match(f.nodes.get('#rows').innerHTML, /Clear search\/filters/);
+  f.run("state.search = ''; state.scraperRunning = false; state.pipelineTotal = 0; renderRows();");
+  assert.match(f.nodes.get('#rows').innerHTML, /No roles collected yet/);
+});
+
+test('rows expose focusable grid semantics and ID-based selection', () => {
+  const f = fixture();
+  assert.match(f.nodes.get('#rows').innerHTML, /role="row" tabindex="0" aria-selected="true" data-id="A"/);
+  assert.match(f.nodes.get('#rows').innerHTML, /role="row" tabindex="0" aria-selected="false" data-id="B"/);
+  f.nodes.get('#rows').listeners.focusin({target: {closest: () => ({dataset: {id: 'B'}})}});
+  assert.equal(f.run('state.selectedId'), 'B');
+});

@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import sqlite3
@@ -85,6 +85,9 @@ def list_jobs(
     status: Optional[str] = "new",
     search: Optional[str] = None,
     sort: Optional[str] = "score_desc",
+    source: Optional[str] = None,
+    limit: int = Query(default=_JOB_LIST_LIMIT, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
     conn=Depends(get_db),
 ):
     query = f"SELECT {_JOB_LIST_COLS} FROM jobs WHERE 1=1"
@@ -99,13 +102,15 @@ def list_jobs(
     if status and status != "all":
         query += " AND status = ?"
         params.append(status)
+    if source and source != "all":
+        query += " AND source = ?"
+        params.append(source)
     if search:
         like = f"%{search.strip()}%"
         query += " AND (company LIKE ? OR title LIKE ? OR location LIKE ?)"
         params.extend([like, like, like])
 
-    query += " ORDER BY date_discovered DESC LIMIT ?"
-    params.append(_JOB_LIST_LIMIT)
+    query += " ORDER BY date_discovered DESC, id ASC"
 
     rows = [dict(r) for r in conn.execute(query, params).fetchall()]
 
@@ -118,7 +123,7 @@ def list_jobs(
         row["match_score"] = match_score(row, profile, _terms=terms)
     if sort != "date_desc":  # default score_desc; fetch is already date-desc
         rows.sort(key=lambda r: r["match_score"], reverse=True)
-    return rows
+    return rows[offset:offset + limit]
 
 
 @app.get("/api/jobs/{job_id}")
@@ -162,6 +167,25 @@ def stats(conn=Depends(get_db)):
     }
 
 
+def scraper_running():
+    """Probe the worker's kernel lock; file existence alone is not liveness."""
+    import worker
+    if worker.fcntl is None:
+        return None
+    try:
+        with open(worker.LOCK_PATH, "r") as lock:
+            try:
+                worker.fcntl.flock(lock, worker.fcntl.LOCK_SH | worker.fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            worker.fcntl.flock(lock, worker.fcntl.LOCK_UN)
+            return False
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
 @app.get("/api/analytics")
 def analytics(conn=Depends(get_db)):
     """Application funnel: total counts per pipeline stage plus recent momentum.
@@ -180,6 +204,7 @@ def analytics(conn=Depends(get_db)):
     ).fetchone()[0]
 
     return {
+        "scraper_running": scraper_running(),
         "inbox": count(" WHERE status = ?", ("new",)),
         "applied": count(" WHERE status = ?", ("applied",)),
         "saved": count(" WHERE status = ?", ("saved",)),

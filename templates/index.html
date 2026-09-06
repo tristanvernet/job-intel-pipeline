@@ -83,8 +83,8 @@
 
   <!-- SPLIT PANE -->
   <main class="flex flex-1 min-h-0">
-    <section id="stream" class="w-[45%] min-w-[340px] overflow-y-auto bg-zinc-950 border-r border-zinc-800" role="listbox" aria-label="Job stream">
-      <div id="rows"></div>
+    <section id="stream" class="w-[45%] min-w-[340px] overflow-y-auto bg-zinc-950 border-r border-zinc-800" role="grid" aria-label="Job stream">
+      <div id="rows" role="rowgroup"></div>
     </section>
     <aside id="detail" class="flex-1 overflow-y-auto bg-zinc-950" aria-label="Job detail">
       <div class="h-full flex items-center justify-center text-sm text-zinc-400 p-8 text-center">
@@ -101,9 +101,10 @@
     // ------------------------------------------------------------------ //
     const state = {
       status:'new', track:'all', domain:'all', search:'', sort:'score_desc',
-      jobs:[], selectedId:null, loading:true,
+      jobs:[], selectedId:null, loading:true, scraperRunning:null, pipelineTotal:null,
     };
     const detailCache = new Map();
+    const prepUpdates = new Map();
     const undoStack = [];
     const pendingMutations = new Map();
     let operationSequence = 0;
@@ -111,6 +112,8 @@
     let listController = null;
     let detailGeneration = 0;
     let toastTimer = null;
+    let toastOperationId = null;
+    const UNDO_MS = 5000;
     let errorTimeout = null;
 
     // ---------- utils ---------- //
@@ -176,16 +179,23 @@
     }
 
     // ---------- toast / undo ---------- //
-    function showToast(msg, onUndo){
+    function showToast(msg, onUndo, operationId = null){
+      hideToast();
+      toastOperationId = operationId;
       const t = $('#toast');
       t.innerHTML = `<span>${esc(msg)}</span>` +
         (onUndo ? `<button id="toast-undo" class="font-mono text-[11px] px-2 py-0.5 rounded border border-zinc-600 hover:bg-zinc-700 transition"><kbd>z</kbd> Undo</button>` : '');
       t.classList.remove('hidden');
-      if (onUndo) $('#toast-undo').onclick = () => { hideToast(); onUndo(); };
+      if (onUndo) $('#toast-undo').onclick = () => onUndo();
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(hideToast, 3000);
+      toastTimer = setTimeout(hideToast, UNDO_MS);
     }
-    function hideToast(){ $('#toast').classList.add('hidden'); clearTimeout(toastTimer); }
+    function hideToast(evict = true){
+      if (evict && toastOperationId !== null) removeUndo(toastOperationId);
+      toastOperationId = null;
+      $('#toast').classList.add('hidden');
+      clearTimeout(toastTimer);
+    }
 
     // ---------- score tiers ---------- //
     function tier(score){
@@ -204,7 +214,11 @@
         };
         set('new', a.inbox); set('applied', a.applied); set('saved', a.saved); set('archived', a.archived);
         const total = a.inbox + a.applied + a.saved + a.archived;
-        const scraped = a.last_scraped ? `Scraped ${fmtRel(a.last_scraped)} ago` : 'Never scraped';
+        state.scraperRunning = a.scraper_running;
+        state.pipelineTotal = total;
+        if (!state.loading && !state.jobs.length) renderRows();
+        const scraped = a.scraper_running ? 'Collecting roles…' :
+          (a.last_scraped ? `Last discovery ${fmtRel(a.last_scraped)} ago` : 'No discoveries yet');
         $('#pipeline-status').textContent = `${scraped} · ${fmt(total)} roles indexed`;
       } catch (e) { $('#pipeline-status').textContent = 'telemetry unavailable'; }
     }
@@ -224,10 +238,17 @@
     function renderRows(){
       const box = $('#rows');
       if (!state.jobs.length){
-        box.innerHTML = `<div class="py-16 text-center text-sm font-medium text-zinc-400">
-          No positions in this view.
-          ${(state.search || state.track !== 'all' || state.domain !== 'all')
-            ? '<br/><button data-action="clear-filters" class="mt-2 text-xs text-sky-400 font-medium hover:underline">Clear filters</button>' : ''}
+        const filtered = state.search.trim() || state.track !== 'all' || state.domain !== 'all';
+        const running = state.scraperRunning === true;
+        const message = filtered ? 'No roles match your search or filters.' :
+          running ? 'Collecting roles. New results will be available when collection finishes.' :
+          state.pipelineTotal === 0 ? 'No roles collected yet. Run python worker.py to get started.' :
+          state.status === 'new' && state.pipelineTotal > 0 ? 'Inbox zero — all collected jobs have been triaged.' :
+          'No roles in this view yet.';
+        box.innerHTML = `<div class="py-16 text-center text-sm font-medium text-zinc-400" role="status">
+          ${running ? '<span class="inline-block w-2 h-2 mr-2 rounded-full bg-sky-400 animate-pulse" aria-hidden="true"></span>' : ''}
+          ${esc(message)}
+          ${filtered ? '<br/><button data-action="clear-filters" class="mt-2 text-xs text-sky-400 hover:underline">Clear search/filters</button>' : ''}
         </div>`;
         $('#result-count').textContent = '0 results';
         return;
@@ -236,12 +257,12 @@
         const t = tier(j.match_score);
         const when = fmtRel(j.date_posted || j.date_discovered);
         return `<div class="row ${String(j.id) === state.selectedId ? 'active' : ''} flex items-center gap-2.5 px-4 border-b border-zinc-900"
-                     role="option" aria-selected="${String(j.id) === state.selectedId}" data-id="${esc(j.id)}">
-          <span class="w-2 h-2 rounded-full shrink-0 ${t.dot}" title="Match ${j.match_score}% · ${t.label}"></span>
-          <span class="w-32 truncate text-[13px] text-zinc-300 shrink-0">${esc(j.company)}</span>
-          <span class="flex-1 truncate text-[13px] font-medium text-zinc-100">${esc(j.title)}</span>
-          <span class="hidden md:flex gap-1">${chip(String(j.track||'').replace('_',' '))}${chip(j.domain || 'General')}</span>
-          <span class="w-8 text-right text-[11px] font-mono tabular-nums text-zinc-400 font-medium shrink-0">${when}</span>
+                     role="row" tabindex="0" aria-selected="${String(j.id) === state.selectedId}" data-id="${esc(j.id)}">
+          <span role="gridcell" class="w-2 h-2 rounded-full shrink-0 ${t.dot}" title="Match ${j.match_score}% · ${t.label}"></span>
+          <span role="gridcell" class="w-32 truncate text-[13px] text-zinc-300 shrink-0">${esc(j.company)}</span>
+          <span role="gridcell" class="flex-1 truncate text-[13px] font-medium text-zinc-100">${esc(j.title)}</span>
+          <span role="gridcell" class="hidden md:flex gap-1">${chip(String(j.track||'').replace('_',' '))}${chip(j.domain || 'General')}</span>
+          <span role="gridcell" class="w-8 text-right text-[11px] font-mono tabular-nums text-zinc-400 font-medium shrink-0">${when}</span>
         </div>`;
       }).join('');
       $('#result-count').textContent = `${fmt(state.jobs.length)} result${state.jobs.length === 1 ? '' : 's'}`;
@@ -364,6 +385,7 @@
         }
       }
       if (generation !== detailGeneration || state.selectedId !== id || state.loading) return;
+      Object.assign(d, prepUpdates.get(id) || {});
       renderDetail(d);
     }
 
@@ -413,10 +435,14 @@
           <button data-action="prep" class="ml-auto px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-900 text-zinc-300 border border-zinc-700 hover:bg-zinc-800 transition">Generate Prep <kbd>p</kbd></button>
         </div>
 
-        ${d.summary ? `<div class="mt-5"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">Interview prep</h3>
-          <p class="text-sm leading-relaxed text-zinc-300">${esc(d.summary)}</p></div>` : ''}
-        ${d.tailored_bullets ? `<div class="mt-4"><h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">Key alignment</h3>
-          <div class="text-sm leading-relaxed text-zinc-300 whitespace-pre-line">${esc(d.tailored_bullets)}</div></div>` : ''}
+        <div id="prep-summary-section" class="mt-5" ${d.summary ? '' : 'hidden'}>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Interview prep</h3>
+          <p id="prep-summary" class="text-sm leading-relaxed text-zinc-300">${esc(d.summary || '')}</p>
+        </div>
+        <div id="prep-bullets-section" class="mt-4" ${d.tailored_bullets ? '' : 'hidden'}>
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Key alignment</h3>
+          <div id="prep-bullets" class="text-sm leading-relaxed text-zinc-300 whitespace-pre-line">${esc(d.tailored_bullets || '')}</div>
+        </div>
 
         <div class="mt-5">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-zinc-400 font-medium mb-1.5">
@@ -445,10 +471,18 @@
       if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
       try {
         const r = await api(`/api/jobs/${encodeURIComponent(id)}/prep`, { method: 'POST' });
-        detailCache.delete(id);
         const j = state.jobs.find(x => String(x.id) === String(id));
         if (j) { j.summary = r.summary; j.tailored_bullets = r.bullets.map(b => '- ' + b).join('\n'); }
-        if (state.selectedId === String(id) && !state.loading) await loadDetail(id);
+        prepUpdates.set(String(id), {summary: r.summary, tailored_bullets: r.bullets.map(b => '- ' + b).join('\n')});
+        const cached = detailCache.get(String(id));
+        if (cached) { cached.summary = r.summary; cached.tailored_bullets = r.bullets.map(b => '- ' + b).join('\n'); }
+        if (state.selectedId === String(id) && !state.loading && $('#detail').dataset.id === String(id) && $('#prep-summary')) {
+          $('#prep-summary').textContent = r.summary;
+          $('#prep-bullets').textContent = r.bullets.map(b => '- ' + b).join('\n');
+          $('#prep-summary-section').hidden = !r.summary;
+          $('#prep-bullets-section').hidden = !r.bullets.length;
+        }
+        if (btn) { btn.disabled = false; btn.innerHTML = 'Generate Prep <kbd>p</kbd>'; }
       } catch (e) {
         showError('Prep generation failed.');
         if (btn) { btn.disabled = false; btn.innerHTML = 'Generate Prep <kbd>p</kbd>'; }
@@ -506,11 +540,15 @@
       const op = {
         operationId: ++operationSequence, id,
         beforeStatus: job.status, targetStatus: newStatus,
-        viewKey: viewKey(), index, job: { ...job }, undoing: false,
+        viewKey: viewKey(), index, job: { ...job }, undoing: false, expiresAt: Date.now() + UNDO_MS,
       };
       undoStack.push(op);
+      setTimeout(() => {
+        removeUndo(op.operationId);
+        if (toastOperationId === op.operationId) hideToast();
+      }, UNDO_MS);
       reconcileOperation(op, newStatus);
-      showToast(`Marked ${newStatus}`, undo);
+      showToast(`Marked ${newStatus}`, undo, op.operationId);
       clearError();
       op.promise = postStatus(id, newStatus).then(() => {
         loadStats();
@@ -527,11 +565,14 @@
 
     function undo(){
       if (state.loading) return;
+      for (const expired of [...undoStack]) {
+        if (expired.expiresAt <= Date.now()) removeUndo(expired.operationId);
+      }
       const op = undoStack[undoStack.length - 1];
       if (!op) { showToast('Nothing to undo'); return; }
       if (op.undoing) return;
       op.undoing = true;
-      hideToast();
+      hideToast(false);
       const promise = (async () => {
         // Undo must follow the original write, never race it on the server.
         if (!await op.promise) return false;
@@ -560,6 +601,10 @@
       const row = e.target.closest('.row');
       if (!row || state.loading) return;
       selectRow(state.jobs.findIndex(j => String(j.id) === row.dataset.id));
+    });
+    $('#rows').addEventListener('focusin', e => {
+      const row = e.target.closest('.row');
+      if (row && !state.loading) selectRow(state.jobs.findIndex(j => String(j.id) === row.dataset.id));
     });
     $('#detail').addEventListener('click', e => {
       const button = e.target.closest('button[data-action]');
@@ -591,12 +636,11 @@
     });
 
     document.addEventListener('keydown', e => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.repeat || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = (e.target && e.target.tagName) || '';
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-        if (e.target === searchEl && e.key === 'Escape') searchEl.blur();
-        return;
-      }
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable ||
+          e.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+      if (e.target?.closest?.('button, a')) return;
       const cur = state.loading ? null : selectedJob();
       const cursor = selectedIndex();
       switch (e.key) {
@@ -623,6 +667,7 @@
     skeleton();
     loadStats();
     loadJobs();
+    setInterval(() => { if (!document.hidden) loadStats(); }, 10000);
   </script>
 </body>
 </html>
