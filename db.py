@@ -1,24 +1,63 @@
 import sqlite3
 import hashlib
+import random
+import time
+from contextlib import closing
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 DB_PATH = Path(__file__).parent / "jobs.db"
 
+BUSY_TIMEOUT_MS = 100
+WRITE_ATTEMPTS = 5
+WRITE_BUDGET_SECONDS = 2.0
+SCHEMA_VERSION = 2
+
+
 def get_connection() -> sqlite3.Connection:
-    # WAL + busy_timeout so the launchd worker (long bulk writes) and uvicorn
-    # (reads/status updates) never hit 'database is locked' on overlap.
-    # check_same_thread=False is required because FastAPI runs sync routes and
-    # generator dependencies in Starlette's anyio threadpool: the connection
-    # created on one worker thread may be used/closed on another. Safety is
-    # preserved because each request/worker step gets its OWN connection and
-    # closes it in finally -- connections are never shared across threads.
-    conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=15000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    # Each operation owns its connection; FastAPI may move it between threads.
+    conn = sqlite3.connect(DB_PATH, timeout=BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}").close()
+        conn.execute("PRAGMA foreign_keys=ON").close()
+        return conn
+    except BaseException:
+        conn.close()
+        raise
+
+
+def is_busy(exc: sqlite3.OperationalError) -> bool:
+    code = getattr(exc, "sqlite_errorcode", None)
+    return (code is not None and (code & 0xff) == sqlite3.SQLITE_BUSY) or "database is locked" in str(exc).lower()
+
+
+def write_transaction(operation, *, initialize_wal=False):
+    """Retry an entire DB-only transaction, reopening after every rollback.
+
+    Callbacks must not perform network calls or other irreversible side effects.
+    Busy waits plus exponential jitter share a two-second contention budget.
+    """
+    deadline = time.monotonic() + WRITE_BUDGET_SECONDS
+    for attempt in range(WRITE_ATTEMPTS):
+        try:
+            with closing(get_connection()) as conn:
+                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                conn.execute(f"PRAGMA busy_timeout={min(BUSY_TIMEOUT_MS, remaining_ms)}").close()
+                # journal_mode cannot change inside a transaction. Only startup
+                # negotiates persistent WAL, under the same bounded retry policy.
+                if initialize_wal:
+                    with closing(conn.execute("PRAGMA journal_mode=WAL")) as cur:
+                        if cur.fetchone()[0].lower() != "wal":
+                            raise RuntimeError("Could not enable SQLite WAL mode")
+                with conn:
+                    conn.execute("BEGIN IMMEDIATE").close()
+                    return operation(conn)  # context commits before returning
+        except sqlite3.OperationalError as exc:
+            remaining = deadline - time.monotonic()
+            if not is_busy(exc) or attempt + 1 == WRITE_ATTEMPTS or remaining <= 0:
+                raise
+            time.sleep(min(0.05 * 2 ** attempt + random.uniform(0, 0.025), remaining))
 
 # Canonical status values. `new` surfaces in the Inbox tab.
 VALID_STATUSES = ("new", "applied", "saved", "archived")
@@ -76,26 +115,18 @@ def _migrate_status_check(conn: sqlite3.Connection):
         VALID_STATUSES,
     )
     cols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
-    col_list = ", ".join(cols)
-    # Commit the normalization UPDATE above so the rebuild can own an explicit
-    # transaction: a crash mid-rebuild must never strand data in jobs_legacy.
-    conn.commit()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute("ALTER TABLE jobs RENAME TO jobs_legacy")
-        conn.execute(_CREATE_JOBS_SQL)
-        conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM jobs_legacy")
-        conn.execute("DROP TABLE jobs_legacy")
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        # Best-effort restore: if the rename succeeded before the failure,
-        # put the original table back rather than leaving only jobs_legacy.
-        try:
-            conn.execute("ALTER TABLE jobs_legacy RENAME TO jobs")
-        except sqlite3.OperationalError:
-            pass
-        raise
+    col_list = ", ".join('"' + col.replace('"', '""') + '"' for col in cols)
+    # Caller owns BEGIN IMMEDIATE and rollback, including normalization above.
+    objects = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE tbl_name='jobs' "
+        "AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+    ).fetchall()
+    conn.execute("ALTER TABLE jobs RENAME TO jobs_legacy")
+    conn.execute(_CREATE_JOBS_SQL)
+    conn.execute(f"INSERT INTO jobs ({col_list}) SELECT {col_list} FROM jobs_legacy")
+    conn.execute("DROP TABLE jobs_legacy")
+    for obj in objects:
+        conn.execute(obj[0])
 
 
 def _migrate_applied_at(conn: sqlite3.Connection):
@@ -115,15 +146,22 @@ def _migrate_applied_at(conn: sqlite3.Connection):
 
 
 def init_db():
-    with get_connection() as conn:
-        conn.execute(_CREATE_JOBS_SQL)
-        _migrate_status_check(conn)
-        _migrate_applied_at(conn)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_track_status ON jobs(track, status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON jobs(domain)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON jobs(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_discovered ON jobs(date_discovered DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_applied_at ON jobs(applied_at)")
+    def migrate(conn):
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(f"Database schema {version} is newer than supported {SCHEMA_VERSION}")
+        if version < 1:
+            conn.execute(_CREATE_JOBS_SQL)
+            _migrate_status_check(conn)
+        if version < 2:
+            _migrate_applied_at(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_track_status ON jobs(track, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON jobs(domain)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON jobs(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_discovered ON jobs(date_discovered DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_applied_at ON jobs(applied_at)")
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    write_transaction(migrate, initialize_wal=True)
 
 def all_job_ids() -> set:
     """Return the set of every job id currently stored.
@@ -131,7 +169,7 @@ def all_job_ids() -> set:
     Used by the background worker to snapshot state before/after a run so it can
     count only the genuinely new roles inserted during that specific run.
     """
-    with get_connection() as conn:
+    with closing(get_connection()) as conn:
         return {row[0] for row in conn.execute("SELECT id FROM jobs").fetchall()}
 
 
@@ -164,13 +202,13 @@ def insert_job(job_data: Dict[str, Any]) -> bool:
         company, title, str(job_data.get("location") or "")
     )
     
-    with get_connection() as conn:
-        try:
-            conn.execute("""
+    def insert(conn):
+        with closing(conn.execute("""
             INSERT INTO jobs (
                 id, company, title, url, location, is_remote,
                 track, term, domain, source, date_posted, raw_description
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
             """, (
                 job_id,
                 company,
@@ -184,10 +222,9 @@ def insert_job(job_data: Dict[str, Any]) -> bool:
                 job_data.get("source", "scout"),
                 job_data.get("date_posted"),
                 job_data.get("raw_description", "")
-            ))
-            return True
-        except sqlite3.IntegrityError:
-            return False
+            ))) as cur:
+            return cur.rowcount == 1
+    return write_transaction(insert)
 
 if __name__ == "__main__":
     init_db()

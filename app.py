@@ -3,27 +3,39 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import sqlite3
+import logging
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
-from db import init_db, get_connection, VALID_STATUSES
+from db import init_db, get_connection, VALID_STATUSES, write_transaction, is_busy
 from prep import get_prep_provider
-from matcher import PROFILE_PATH, explain, flatten_terms, load_profile, match_score
+from matcher import PROFILE_PATH, default_profile, explain, flatten_terms, load_profile, match_score
 
 # Profile cache keyed on profile.json mtime: avoids re-reading and re-parsing
 # the file on every API request while still picking up hand edits instantly.
-_PROFILE_CACHE: dict = {}
+_PROFILE_LOCK = Lock()
+_PROFILE_CACHE: Optional[tuple[Optional[int], dict]] = None
+logger = logging.getLogger(__name__)
 
 
 def cached_profile() -> dict:
-    try:
-        mtime = PROFILE_PATH.stat().st_mtime
-    except OSError:
-        mtime = None
-    if _PROFILE_CACHE.get("mtime") != mtime:
-        _PROFILE_CACHE.clear()
-        _PROFILE_CACHE.update(data=load_profile(), mtime=mtime)
-    return _PROFILE_CACHE["data"]
+    global _PROFILE_CACHE
+    with _PROFILE_LOCK:
+        try:
+            try:
+                mtime = PROFILE_PATH.stat().st_mtime_ns
+            except FileNotFoundError:
+                mtime = None
+            if _PROFILE_CACHE is None or _PROFILE_CACHE[0] != mtime:
+                candidate = load_profile(PROFILE_PATH)
+                _PROFILE_CACHE = (mtime, candidate)
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not reload profile; retaining last good profile: %s", exc)
+            if _PROFILE_CACHE is None:
+                # Do not cache a failed file's mtime: retry when it is repaired.
+                _PROFILE_CACHE = (None, default_profile())
+        return _PROFILE_CACHE[1]
 
 
 # Columns the list view actually renders; raw_description (KBs per row) is
@@ -58,7 +70,6 @@ def get_db():
     conn = get_connection()
     try:
         yield conn
-        conn.commit()
     finally:
         conn.close()
 
@@ -182,22 +193,33 @@ def analytics(conn=Depends(get_db)):
     }
 
 
+def write_mutation(operation):
+    try:
+        return write_transaction(operation)
+    except sqlite3.OperationalError as exc:
+        if is_busy(exc):
+            raise HTTPException(503, "Database busy; retry shortly", headers={"Retry-After": "1"}) from exc
+        raise
+
+
 @app.post("/api/jobs/{job_id}/status")
-def update_status(job_id: str, payload: StatusUpdate, conn=Depends(get_db)):
+def update_status(job_id: str, payload: StatusUpdate):
     if payload.status not in VALID_STATUSES:
         raise HTTPException(status_code=400, detail=f"Invalid status: {payload.status}")
-    # Single statement: `applied_at` is stamped exactly when entering the
-    # applied state and NULLed on any reversal, so analytics never see stale
-    # timestamps on jobs that were un-applied.
-    cur = conn.execute(
-        "UPDATE jobs SET status = ?, "
-        "applied_at = CASE WHEN ? = 'applied' THEN CURRENT_TIMESTAMP ELSE NULL END "
-        "WHERE id = ?",
-        (payload.status, payload.status, job_id),
-    )
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return {"ok": True, "job_id": job_id, "status": payload.status}
+
+    def update(conn):
+        cur = conn.execute(
+            "UPDATE jobs SET status = ?, "
+            "applied_at = CASE WHEN ? = 'applied' THEN CURRENT_TIMESTAMP ELSE NULL END "
+            "WHERE id = ?", (payload.status, payload.status, job_id),
+        )
+        try:
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Job not found")
+        finally:
+            cur.close()
+        return {"ok": True, "job_id": job_id, "status": payload.status}
+    return write_mutation(update)
 
 
 @app.post("/api/jobs/{job_id}/prep")
@@ -208,10 +230,17 @@ def generate_prep(job_id: str, conn=Depends(get_db)):
     job = dict(row)
 
     result = get_prep_provider().generate(job)
-    conn.execute(
-        "UPDATE jobs SET summary = ?, tailored_bullets = ? WHERE id = ?",
-        (result.summary, result.bullets_text(), job_id),
-    )
+    def persist(write_conn):
+        cur = write_conn.execute(
+            "UPDATE jobs SET summary = ?, tailored_bullets = ? WHERE id = ?",
+            (result.summary, result.bullets_text(), job_id),
+        )
+        try:
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Job not found")
+        finally:
+            cur.close()
+    write_mutation(persist)
 
     return {
         "ok": True,

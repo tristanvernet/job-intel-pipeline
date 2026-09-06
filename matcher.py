@@ -8,6 +8,7 @@ yields the same integer score. This module has no network or DB dependencies so
 it is trivially testable and safe to call on every API request.
 
 Public surface:
+    default_profile() -> dict
     load_profile(path=None) -> dict
     match_score(job, profile=None) -> int        # 0..100
     explain(job, profile=None) -> dict            # matched terms + raw weight
@@ -36,8 +37,8 @@ _TOKEN_RE = re.compile(r"[a-z0-9+#.]+")
 _DEFAULT_SATURATION = 6.0
 
 
-def _default_profile() -> Dict[str, Any]:
-    """Minimal built-in profile used only when profile.json is absent."""
+def default_profile() -> Dict[str, Any]:
+    """Return a fresh safe profile for missing or initially unreadable files."""
     return {
         "languages": {"python": 1.0, "java": 1.0},
         "frameworks": {},
@@ -50,14 +51,19 @@ def _default_profile() -> Dict[str, Any]:
 def load_profile(path: Optional[str | Path] = None) -> Dict[str, Any]:
     """Load a profile from disk, falling back to a safe default.
 
-    Never raises for a missing file; a corrupt file raises json.JSONDecodeError
-    so the caller sees an explicit, actionable error rather than silent bad data.
+    Never raises for a missing file. Invalid JSON or a non-object document
+    raises ValueError so cache callers can retain a last-known-good snapshot.
     """
     p = Path(path) if path is not None else PROFILE_PATH
-    if not p.exists():
-        return _default_profile()
-    with open(p, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            profile = json.load(fh)
+    except FileNotFoundError:
+        # Open directly: the file can disappear between exists() and open().
+        return default_profile()
+    if not isinstance(profile, dict):
+        raise ValueError("Profile must be a JSON object")
+    return profile
 
 
 def _normalize(text: Any) -> str:

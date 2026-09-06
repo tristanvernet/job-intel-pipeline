@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Optional
+from threading import Lock
 
 from matcher import PROFILE_PATH, _WEIGHTED_SECTIONS, tokenize
 
@@ -272,10 +274,26 @@ def load_existing_profile(path: str | Path) -> Dict[str, Any]:
         return json.load(fh)
 
 
+_PROFILE_WRITE_LOCK = Lock()
+
+
 def save_profile(profile: Dict[str, Any], path: str | Path) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(profile, fh, indent=2, sort_keys=False)
-        fh.write("\n")
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    # Serialize callers in this process. Exclusive creation also prevents two
+    # CLI processes from sharing/truncating the same sibling temporary file.
+    with _PROFILE_WRITE_LOCK:
+        fh = open(temporary, "x", encoding="utf-8")
+        try:
+            with fh:
+                json.dump(profile, fh, indent=2, sort_keys=False)
+                fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
 
 def build_profile(
