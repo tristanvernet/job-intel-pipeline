@@ -276,11 +276,18 @@
         if (!b.querySelector('.cnt'))
           b.insertAdjacentHTML('beforeend', ' <span class="cnt font-mono tabular-nums text-[11px]"></span>');
       });
-      const pill = on => on
-        ? 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 text-zinc-100 border border-zinc-600 transition'
-        : 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 text-zinc-400 border border-zinc-800 hover:border-zinc-700 transition';
-      document.querySelectorAll('.track-btn').forEach(b => b.className = pill(b.dataset.track === state.track));
-      document.querySelectorAll('.dom-btn').forEach(b => b.className = pill(b.dataset.domain === state.domain));
+      paintPills('.track-btn', 'track', state.track);
+      paintPills('.dom-btn', 'domain', state.domain);
+    }
+
+    const PILL_ON  = 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-800 text-zinc-100 border border-zinc-600 transition';
+    const PILL_OFF = 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 text-zinc-400 border border-zinc-800 hover:border-zinc-700 transition';
+
+    function paintPills(selector, attr, value){
+      document.querySelectorAll(selector).forEach(b => {
+        const ident = selector.slice(1); // track-btn | dom-btn
+        b.className = ident + ' ' + (b.dataset[attr] === value ? PILL_ON : PILL_OFF);
+      });
     }
 
     function invalidateList(){
@@ -622,8 +629,16 @@
       if (e.target.closest('[data-action="clear-error"]')) clearError();
     });
     document.querySelectorAll('.tab').forEach(b => b.onclick = () => { state.status = b.dataset.status; paintTabs(); loadJobs(); });
-    document.querySelectorAll('.track-btn').forEach(b => b.onclick = () => { state.track = b.dataset.track; paintTabs(); loadJobs(); });
-    document.querySelectorAll('.dom-btn').forEach(b => b.onclick = () => { state.domain = b.dataset.domain; paintTabs(); loadJobs(); });
+    document.querySelectorAll('.track-btn').forEach(b => b.onclick = () => {
+      state.track = b.dataset.track;
+      paintPills('.track-btn', 'track', state.track); // strip siblings, activate this group only
+      loadJobs();
+    });
+    document.querySelectorAll('.dom-btn').forEach(b => b.onclick = () => {
+      state.domain = b.dataset.domain;
+      paintPills('.dom-btn', 'domain', state.domain);
+      loadJobs();
+    });
     $('#sort').onchange = e => { state.sort = e.target.value; loadJobs(); };
 
     const searchEl = $('#search');
