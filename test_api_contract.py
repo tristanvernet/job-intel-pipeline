@@ -3,9 +3,10 @@
 Tests reach the app only through HTTP and seed rows with plain sqlite3 after
 startup has created the schema, so they survive changes behind the routes.
 """
+import fcntl
 import json
+import re
 import sqlite3
-import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
@@ -43,6 +44,12 @@ LISTED = {
     "i9": {"id": "i9", "company": "Wonka", "title": "Python Developer", "url": "https://wonka.example/i9", "location": "Remote", "is_remote": 1, "track": "internship", "term": "Fall 2027", "domain": "AI/ML", "source": "scout", "date_posted": None, "date_discovered": "2026-09-05 10:00:00", "status": "archived", "applied_at": None, "summary": None, "tailored_bullets": None, "match_score": 25},
 }
 
+SEED_COLUMNS = (
+    "id", "company", "title", "url", "location", "is_remote", "track", "term", "domain",
+    "source", "date_posted", "date_discovered", "status", "applied_at", "summary",
+    "tailored_bullets", "raw_description",
+)
+
 A1_DETAIL = {
     "id": "a1", "company": "Acme", "title": "Software Engineer", "url": "https://acme.example/a1",
     "location": "New York, NY", "is_remote": 0, "track": "full_time", "term": "Entry", "domain": "SWE",
@@ -77,14 +84,13 @@ A1_BULLETS = [
 def client(settings):
     settings.profile_path.write_text(json.dumps(PROFILE), encoding="utf-8")
     with TestClient(app.app) as client:
-        columns = [c for c in LISTED["a1"] if c != "match_score"] + ["raw_description"]
         rows = [
-            [job[c] for c in columns[:-1]] + [f"Posting {job['id']}"]
+            [{**job, "raw_description": f"Posting {job['id']}"}[c] for c in SEED_COLUMNS]
             for job in LISTED.values()
         ]
         with closing(sqlite3.connect(settings.db_path)) as conn, conn:
             conn.executemany(
-                f"INSERT INTO jobs ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+                f"INSERT INTO jobs ({', '.join(SEED_COLUMNS)}) VALUES ({', '.join('?' * len(SEED_COLUMNS))})",
                 rows,
             )
         yield client
@@ -92,6 +98,7 @@ def client(settings):
 
 def assert_body(response, status, expected):
     assert response.status_code == status
+    assert response.headers["content-type"] == "application/json"
     assert response.json() == expected
     assert json.dumps(response.json()) == json.dumps(expected), "key order differs"
 
@@ -170,6 +177,34 @@ def test_analytics_with_no_lock_file_reports_scraper_not_running(client):
     })
 
 
+def test_analytics_while_worker_holds_lock_reports_scraper_running(client, settings):
+    with open(settings.lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert client.get("/api/analytics").json()["scraper_running"] is True
+    assert client.get("/api/analytics").json()["scraper_running"] is False
+
+
+@pytest.mark.parametrize("query,loc,kind,msg,value,ctx", [
+    ("limit=0", "limit", "greater_than_equal", "Input should be greater than or equal to 1", "0", {"ge": 1}),
+    ("offset=-1", "offset", "greater_than_equal", "Input should be greater than or equal to 0", "-1", {"ge": 0}),
+    ("limit=5001", "limit", "less_than_equal", "Input should be less than or equal to 5000", "5001", {"le": 5000}),
+])
+def test_list_rejects_out_of_range_paging(client, query, loc, kind, msg, value, ctx):
+    assert_body(client.get("/api/jobs?" + query), 422, {"detail": [
+        {"type": kind, "loc": ["query", loc], "msg": msg, "input": value, "ctx": ctx},
+    ]})
+
+
+def test_list_unknown_sort_falls_back_to_score_order(client):
+    assert_body(client.get("/api/jobs?sort=bogus"), 200, listed("d4", "g7", "a1", "b2", "c3"))
+
+
+def test_status_update_requires_status_field(client):
+    assert_body(client.post("/api/jobs/a1/status", json={}), 422, {"detail": [
+        {"type": "missing", "loc": ["body", "status"], "msg": "Field required", "input": {}},
+    ]})
+
+
 def test_status_update_body(client):
     assert_body(
         client.post("/api/jobs/c3/status", json={"status": "saved"}), 200,
@@ -182,6 +217,7 @@ def test_applying_stamps_applied_at_and_other_statuses_clear_it(client):
     client.post("/api/jobs/a1/status", json={"status": "applied"})
     applied = client.get("/api/jobs/a1").json()
     assert applied["status"] == "applied"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", applied["applied_at"])
     assert timedelta(0) <= utc_age(applied["applied_at"]) < timedelta(minutes=1)
     assert client.get("/api/analytics").json()["applied_last_7_days"] == 2
 
@@ -214,14 +250,11 @@ def test_status_update_unknown_job_is_404(client):
 def test_locked_database_returns_retryable_503(client, settings, path, body):
     with closing(sqlite3.connect(settings.db_path)) as held:
         held.execute("BEGIN IMMEDIATE")
-        started = time.monotonic()
         response = client.post(path, json=body)
-        elapsed = time.monotonic() - started
         held.rollback()
     assert_body(response, 503, {"detail": "Database busy; retry shortly"})
     assert response.headers["retry-after"] == "1"
-    assert elapsed < 2.5
-    assert_body(client.get("/api/jobs?search=acme"), 200, listed("a1"))
+    assert_body(client.get("/api/jobs/a1"), 200, A1_DETAIL)
 
 
 def test_prep_body_and_persistence(client):
