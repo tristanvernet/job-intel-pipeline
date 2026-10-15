@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -26,7 +27,18 @@ def test_public_connect_ex_is_blocked():
             sock.connect_ex(("203.0.113.7", 80))
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+def test_dns_lookup_of_public_name_is_blocked():
+    with pytest.raises(RuntimeError, match="network access blocked in tests: DNS lookup of github.com"):
+        socket.getaddrinfo("github.com", 443)
+
+
+def test_udp_sendto_public_address_is_blocked():
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as sock:
+        with pytest.raises(RuntimeError, match=r"network access blocked in tests: 203\.0\.113\.7:53"):
+            sock.sendto(b"x", ("203.0.113.7", 53))
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "LOCALHOST"])
 def test_loopback_connect_is_allowed(host):
     with closing(socket.create_server(("127.0.0.1", 0))) as server:
         port = server.getsockname()[1]
@@ -73,3 +85,17 @@ def test_exported_jobintel_variables_do_not_reach_path_globals(tmp_path):
         cwd=config.ROOT, env=env, capture_output=True, text=True, timeout=30, check=True,
     ).stdout.strip()
     assert out == str(config.ROOT / "jobs.db")
+
+
+def test_no_loaded_module_still_points_at_working_copy_state():
+    defaults = config.Settings()
+    real = {defaults.db_path, defaults.profile_path, defaults.schedule_config_path, defaults.lock_path}
+    leaks = sorted(
+        f"{name}.{attr}"
+        for name, module in list(sys.modules.items())
+        if str(getattr(module, "__file__", "") or "").startswith(str(config.ROOT))
+        and not name.startswith(("test_", "conftest"))
+        for attr, value in vars(module).items()
+        if isinstance(value, Path) and value in real
+    )
+    assert leaks == []

@@ -14,16 +14,19 @@ import config  # noqa: E402
 import db  # noqa: E402
 import matcher  # noqa: E402
 import schedule  # noqa: E402
+import sync_profile  # noqa: E402
 import worker  # noqa: E402
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex
+_real_sendto = socket.socket.sendto
+_real_getaddrinfo = socket.getaddrinfo
 
 
-def _allowed(sock, address):
-    if sock.family not in (socket.AF_INET, socket.AF_INET6):
+def _is_loopback(host):
+    if host is None:
         return True
-    host = address[0]
+    host = str(host).split("%", 1)[0].rstrip(".").lower()
     if host == "localhost":
         return True
     try:
@@ -33,7 +36,7 @@ def _allowed(sock, address):
 
 
 def _guard(sock, address):
-    if not _allowed(sock, address):
+    if sock.family in (socket.AF_INET, socket.AF_INET6) and not _is_loopback(address[0]):
         raise RuntimeError(f"network access blocked in tests: {address[0]}:{address[1]}")
 
 
@@ -45,6 +48,27 @@ def _connect(self, address):
 def _connect_ex(self, address):
     _guard(self, address)
     return _real_connect_ex(self, address)
+
+
+def _sendto(self, data, *args):
+    _guard(self, args[-1])
+    return _real_sendto(self, data, *args)
+
+
+def _getaddrinfo(host, *args, **kwargs):
+    if host is not None and not _is_loopback(host):
+        try:
+            ipaddress.ip_address(str(host).split("%", 1)[0])
+        except ValueError:
+            raise RuntimeError(f"network access blocked in tests: DNS lookup of {host}") from None
+    return _real_getaddrinfo(host, *args, **kwargs)
+
+
+# Installed at import so collection, session fixtures, and plugins are covered too.
+socket.socket.connect = _connect
+socket.socket.connect_ex = _connect_ex
+socket.socket.sendto = _sendto
+socket.getaddrinfo = _getaddrinfo
 
 
 @pytest.fixture(autouse=True)
@@ -63,10 +87,9 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SETTINGS", current)
     monkeypatch.setattr(db, "DB_PATH", current.db_path)
     monkeypatch.setattr(matcher, "PROFILE_PATH", current.profile_path)
+    monkeypatch.setattr(sync_profile, "PROFILE_PATH", current.profile_path)
     monkeypatch.setattr(app, "PROFILE_PATH", current.profile_path)
     monkeypatch.setattr(app, "_PROFILE_CACHE", None)
     monkeypatch.setattr(worker, "LOCK_PATH", current.lock_path)
     monkeypatch.setattr(schedule, "CONFIG_PATH", current.schedule_config_path)
-    monkeypatch.setattr(socket.socket, "connect", _connect)
-    monkeypatch.setattr(socket.socket, "connect_ex", _connect_ex)
     return current
