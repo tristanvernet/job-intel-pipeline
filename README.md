@@ -82,3 +82,26 @@ uvicorn app:app --reload --port 8000
 ```
 
 Open `http://127.0.0.1:8000`. The Inbox tab loads first; `/` focuses search.
+
+## Configuration
+
+Every setting has a default, so nothing is required. Override one by exporting its variable. An empty value counts as unset. Relative paths resolve against the repo root, and `~` expands.
+
+| Variable | Default |
+| --- | --- |
+| `JOBINTEL_DB_PATH` | `jobs.db` |
+| `JOBINTEL_PROFILE_PATH` | `profile.json` |
+| `JOBINTEL_SCHEDULE_CONFIG_PATH` | `schedule_config.json` |
+| `JOBINTEL_LOCK_PATH` | `~/.jobintel.lock` |
+| `JOBINTEL_HOST` | `127.0.0.1` |
+| `JOBINTEL_PORT` | `8000` |
+
+`JOBINTEL_HOST` and `JOBINTEL_PORT` apply to `python app.py`. A bare `uvicorn` command takes its own `--host` and `--port`.
+
+Nothing loads `.env` or `.env.example` automatically. Copy the example, edit it, and export it into your shell:
+
+```bash
+cp .env.example .env
+set -a; . ./.env; set +a
+python app.py
+```
