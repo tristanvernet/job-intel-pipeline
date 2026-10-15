@@ -253,3 +253,9 @@ def run_github_fetch(sink: JobSink):
         outcomes.append(outcome)
         print(json.dumps(outcome, sort_keys=True))
     return outcomes
+
+
+if __name__ == "__main__":
+    import db
+
+    run_github_fetch(db)

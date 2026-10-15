@@ -203,3 +203,9 @@ def run_scout(sink: JobSink, results_per_query: int = 10):
     report = summarize(outcomes)
     print(f"Scout complete: {report}")
     return report
+
+
+if __name__ == "__main__":
+    import db
+
+    run_scout(db)

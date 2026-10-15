@@ -118,10 +118,17 @@ def test_db_check_violation_raises_rejected_job(field):
     assert db.insert_job(job) is True
 
 
+def _is_main_guard(node):
+    return (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__")
+
+
 def imported_modules(path):
     tree = ast.parse(Path(__file__).with_name(path).read_text())
+    # The `__main__` block is the script's composition root; only the collector code must stay storage-free.
+    body = [node for node in tree.body if not _is_main_guard(node)]
     names = set()
-    for node in ast.walk(tree):
+    for node in (child for top in body for child in ast.walk(top)):
         if isinstance(node, ast.Import):
             names.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
