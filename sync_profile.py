@@ -143,7 +143,7 @@ def scan_text_for_tech(text: str) -> Dict[str, Dict[str, float]]:
     sections: Dict[str, Dict[str, float]] = {s: {} for s in _WEIGHTED_SECTIONS}
     for section, vocab in _SECTION_VOCAB.items():
         counts: Counter[str] = Counter()
-        for term in vocab:
+        for term in sorted(vocab):
             if " " in term or any(c in term for c in "+#./"):
                 occurrences = normalized.count(term)
             else:
