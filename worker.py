@@ -103,15 +103,15 @@ def _window_label(schedule: Optional[Dict[str, object]]) -> str:
 def run(settings, *, interval: Optional[str] = None, notify_enabled: bool = True,
         skip_github: bool = False, skip_scout: bool = False) -> Dict[str, object]:
     """Full worker run: execute the pipeline and notify about new roles."""
-    config = schedule_mod.load_config(settings.schedule_config_path)
+    schedule_config = schedule_mod.load_config(settings.schedule_config_path)
     schedule = None
     try:
-        schedule = schedule_mod.resolve_schedule(config, interval)
+        schedule = schedule_mod.resolve_schedule(schedule_config, interval)
         print(f"[worker] schedule: {schedule_mod.describe(schedule)}")
     except Exception as e:  # noqa: BLE001
         print(f"[worker] could not resolve schedule ({e}); continuing")
 
-    if notify_enabled and not config.get("notify", True):
+    if notify_enabled and not schedule_config.get("notify", True):
         notify_enabled = False
 
     summary = run_pipeline(
