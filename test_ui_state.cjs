@@ -330,3 +330,15 @@ test('rows expose focusable grid semantics and ID-based selection', () => {
   f.nodes.get('#rows').listeners.focusin({target: {closest: () => ({dataset: {id: 'B'}})}});
   assert.equal(f.run('state.selectedId'), 'B');
 });
+
+test('status tabs expose the active tab through aria-selected', () => {
+  const f = fixture();
+  f.run(`tabs = ['new', 'applied'].map(status => ({
+      dataset: { status }, attrs: {}, className: '',
+      setAttribute(name, value) { this.attrs[name] = value; },
+      querySelector: () => ({}), insertAdjacentHTML() {} }));
+    document.querySelectorAll = selector => selector === '.tab' ? tabs : [];
+    state.status = 'applied';
+    paintTabs();`);
+  assert.deepEqual(JSON.parse(f.run('JSON.stringify(tabs.map(t => t.attrs["aria-selected"]))')), ['false', 'true']);
+});

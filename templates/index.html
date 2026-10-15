@@ -271,6 +271,7 @@
     function paintTabs(){
       document.querySelectorAll('.tab').forEach(b => {
         const on = b.dataset.status === state.status;
+        b.setAttribute('aria-selected', String(on));
         b.className = 'tab px-3 py-2 text-[13px] border-b-2 -mb-px transition ' +
           (on ? 'border-sky-500 text-zinc-100 font-medium' : 'border-transparent text-zinc-400 hover:text-zinc-200');
         if (!b.querySelector('.cnt'))
