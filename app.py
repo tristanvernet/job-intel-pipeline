@@ -10,7 +10,6 @@ from config import SETTINGS
 from db import DatabaseBusy, JobDB, JobFilters, VALID_STATUSES
 from prep import get_prep_provider
 import matcher
-import worker
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -69,6 +68,7 @@ def create_app(settings) -> FastAPI:
 
     @app.get("/api/analytics")
     def analytics(request: Request):
+        import worker  # lazy: the API should not load the collector and notification stack at startup
         return {"scraper_running": worker.lock_held(settings.lock_path), **request.app.state.store.funnel()}
 
     @app.post("/api/jobs/{job_id}/status")

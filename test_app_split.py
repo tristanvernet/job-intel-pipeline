@@ -12,7 +12,7 @@ import worker
 
 
 def persistence_violations(source):
-    return re.findall(r"\.execute\s*\(|\bimport\s+sqlite3\b|\bfrom\s+sqlite3\b", source)
+    return re.findall(r"\.execute(?:many|script)?\s*\(|\bimport\s+sqlite3\b|\bfrom\s+sqlite3\b", source)
 
 
 def test_sql_stays_in_db_module():
@@ -31,6 +31,8 @@ def test_sql_stays_in_db_module():
 @pytest.mark.parametrize("source", [
     'conn.execute("SELECT 1")',
     'conn.execute ("SELECT 1")',
+    'conn.executemany("INSERT", rows)',
+    'conn.executescript("CREATE")',
     'import sqlite3',
     'from sqlite3 import connect',
 ])
@@ -97,3 +99,13 @@ def test_invalid_status_does_not_touch_store(monkeypatch):
 def test_lock_probe_reports_unknown_without_fcntl(settings, monkeypatch):
     monkeypatch.setattr(worker, "fcntl", None)
     assert worker.lock_held(settings.lock_path) is None
+
+
+def test_importing_app_does_not_load_the_worker_stack():
+    import subprocess
+    import sys
+    out = subprocess.run(
+        [sys.executable, "-c", "import sys, app; print(sorted(m for m in ('worker', 'notify', 'scout', 'fetch_github') if m in sys.modules))"],
+        cwd=Path(__file__).parent, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert out == "[]"
