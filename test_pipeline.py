@@ -448,8 +448,9 @@ def test_load_profile_missing_returns_default(tmp_path):
     ) > 0
 
 
-def test_shipped_profile_json_scores_reasonably():
-    prof = matcher.load_profile()  # real profile.json
+def test_shipped_example_profile_scores_reasonably():
+    # profile.json is gitignored, so the example is the only profile the repo ships.
+    prof = matcher.load_profile(matcher.PROFILE_PATH.with_name("profile.example.json"))
     strong = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
     weak = {"title": "Store Clerk", "track": "full_time", "domain": "General"}
     # Saturation is intentionally softened (6.0) so entry-level roles spread
