@@ -57,11 +57,12 @@ KNOWN_KEYWORDS = {
     "embedded", "kernel", "compiler", "data", "analytics",
 }
 
+# Sorted tuples: iterating the sets directly would order profile keys by hash seed.
 _SECTION_VOCAB = {
-    "languages": KNOWN_LANGUAGES,
-    "frameworks": KNOWN_FRAMEWORKS,
-    "skills": KNOWN_SKILLS,
-    "keywords": KNOWN_KEYWORDS,
+    "languages": tuple(sorted(KNOWN_LANGUAGES)),
+    "frameworks": tuple(sorted(KNOWN_FRAMEWORKS)),
+    "skills": tuple(sorted(KNOWN_SKILLS)),
+    "keywords": tuple(sorted(KNOWN_KEYWORDS)),
 }
 
 # GitHub language name -> our canonical language key.
@@ -135,7 +136,7 @@ def scan_text_for_tech(text: str) -> Dict[str, Dict[str, float]]:
 
     Weights are frequency-normalized within each section to a 0..1 range, so the
     most-mentioned technology in a section anchors at 1.0 and the rest scale down.
-    Deterministic: identical text always yields identical weights.
+    Deterministic: identical text always yields identical weights in the same key order.
     """
     normalized = text.lower()
     tokens = tokenize(normalized)
@@ -143,7 +144,7 @@ def scan_text_for_tech(text: str) -> Dict[str, Dict[str, float]]:
     sections: Dict[str, Dict[str, float]] = {s: {} for s in _WEIGHTED_SECTIONS}
     for section, vocab in _SECTION_VOCAB.items():
         counts: Counter[str] = Counter()
-        for term in sorted(vocab):
+        for term in vocab:
             if " " in term or any(c in term for c in "+#./"):
                 occurrences = normalized.count(term)
             else:
