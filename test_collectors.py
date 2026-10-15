@@ -12,15 +12,15 @@ from collector_status import RejectedJob
 
 
 class MemorySink:
-    def __init__(self, reject=(), fail=()):
-        self.reject, self.fail = set(reject), set(fail)
+    def __init__(self, reject=(), fail=(), error=RuntimeError("disk I/O error")):
+        self.reject, self.fail, self.error = set(reject), set(fail), error
         self.rows = {}
         self.attempts = 0
 
     def insert_job(self, job):
         self.attempts += 1
         if job["company"] in self.fail:
-            raise RuntimeError("disk I/O error")
+            raise self.error
         if job["company"] in self.reject:
             raise RejectedJob("CHECK constraint failed")
         if job["url"] in self.rows:
@@ -49,13 +49,14 @@ def test_scout_ingest_counts_each_row_outcome():
     assert sink.rows["https://example.com/a"]["track"] == "full_time"
 
 
-def test_scout_sink_failure_ends_the_source(monkeypatch):
+@pytest.mark.parametrize("error", [RuntimeError("disk I/O error"), ValueError("disk I/O error"), TypeError("disk I/O error")])
+def test_scout_sink_failure_ends_the_source(monkeypatch, error):
     monkeypatch.setattr(scout, "SEARCH_QUERIES", [{"query": "q", "default_track": "full_time"}])
     monkeypatch.setattr(scout, "SITES", ["indeed"])
     monkeypatch.setattr(scout.time, "sleep", lambda _: None)
     frame = pd.DataFrame([scout_row("Broken"), scout_row("Acme", url="https://example.com/b")])
     monkeypatch.setattr(scout, "scrape_jobs", lambda **kw: frame)
-    sink = MemorySink(fail={"Broken"})
+    sink = MemorySink(fail={"Broken"}, error=error)
     report = scout.run_scout(sink)
     assert report["status"] == "failed"
     assert [(s["source"], s["status"], s["error"], s["inserted"]) for s in report["sources"]] == [
@@ -98,14 +99,35 @@ def test_github_fetch_counts_each_row_outcome(github_source):
     assert list(sink.rows) == ["https://acme.example/1"]
 
 
-def test_github_sink_failure_ends_the_source(github_source):
-    sink = MemorySink(fail={"Acme"})
+@pytest.mark.parametrize("error", [RuntimeError("disk I/O error"), ValueError("disk I/O error"), TypeError("disk I/O error")])
+def test_github_sink_failure_ends_the_source(github_source, error):
+    sink = MemorySink(fail={"Acme"}, error=error)
     assert fetch_github.run_github_fetch(sink) == [{
         "source": "https://example.com/list.md", "ok": False, "status": "failed",
         "fetched": 5, "inserted": 0, "added": 0, "rejected": 0, "skipped": 2,
         "error": "disk I/O error",
     }]
     assert sink.attempts == 1
+
+
+def test_github_fetch_through_the_real_db_counts_a_check_violation_as_rejected(github_source, monkeypatch):
+    def payloads(content, default_track, term_hint, stats=None):
+        rows = [
+            {"company": "Acme", "title": "Software Engineer Intern", "url": "https://acme.example/1",
+             "track": "internship", "domain": "SWE"},
+            {"company": "Bad", "title": "Software Engineer Intern", "url": "https://bad.example/1",
+             "track": "internship", "domain": "Marketing"},
+            {"company": "Globex", "title": "Software Engineer Intern", "url": "https://globex.example/1",
+             "track": "internship", "domain": "SWE"},
+        ]
+        stats.update(total_rows=3, kept=3, skipped=0, reasons={})
+        return rows, 0
+    monkeypatch.setattr(fetch_github, "parse_markdown_table", payloads)
+    db.init_db()
+    [outcome] = fetch_github.run_github_fetch(db)
+    assert (outcome["status"], outcome["inserted"], outcome["rejected"]) == ("partial", 2, 1)
+    assert "CHECK constraint failed" in outcome["error"]
+    assert len(db.all_job_ids()) == 2
 
 
 @pytest.mark.parametrize("field", ["track", "domain"])
@@ -119,8 +141,11 @@ def test_db_check_violation_raises_rejected_job(field):
 
 
 def _is_main_guard(node):
-    return (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
-            and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__")
+    test = getattr(node, "test", None)
+    return (isinstance(node, ast.If) and isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name) and test.left.id == "__name__"
+            and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+            and isinstance(test.comparators[0], ast.Constant) and test.comparators[0].value == "__main__")
 
 
 def imported_modules(path):
