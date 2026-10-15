@@ -6,6 +6,7 @@ import plistlib
 import pytest
 
 import db
+from config import ROOT
 import notify
 import schedule as schedule_mod
 import setup_schedule
@@ -67,7 +68,7 @@ def test_describe():
 
 
 def test_shipped_config_resolves():
-    resolved = schedule_mod.resolve_schedule(schedule_mod.load_config())
+    resolved = schedule_mod.resolve_schedule(schedule_mod.load_config(ROOT / "schedule_config.json"))
     assert resolved["schedule"] in ("daily", "weekly", "custom")
 
 
