@@ -4,7 +4,9 @@ Covers: markdown/parser logic, classifier rules, scout payload mapping, and the
 FastAPI endpoints (against a throwaway temp DB). No network is ever touched.
 """
 import importlib
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -450,7 +452,8 @@ def test_load_profile_missing_returns_default(tmp_path):
 
 def test_shipped_example_profile_scores_reasonably():
     # profile.json is gitignored, so the example is the only profile the repo ships.
-    prof = matcher.load_profile(matcher.PROFILE_PATH.with_name("profile.example.json"))
+    # Read it directly: load_profile would silently fall back to the default if it went missing.
+    prof = json.loads((Path(__file__).parent / "profile.example.json").read_text(encoding="utf-8"))
     strong = {"title": "Backend Software Engineer", "track": "full_time", "domain": "SWE"}
     weak = {"title": "Store Clerk", "track": "full_time", "domain": "General"}
     # Saturation is intentionally softened (6.0) so entry-level roles spread
@@ -459,6 +462,7 @@ def test_shipped_example_profile_scores_reasonably():
     strong_score = matcher.match_score(strong, prof)
     assert strong_score >= 50
     assert strong_score < 95
+    assert set(matcher.explain(strong, prof)["matched_terms"]) == {"backend", "software", "engineer", "swe"}
     assert matcher.match_score(weak, prof) == 0
 
 
