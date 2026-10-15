@@ -86,3 +86,21 @@ def test_build_profile_is_pure(monkeypatch):
         "skills": {"backend": 1.0},
         "score_saturation": 6.0,
     }
+
+
+def test_cli_with_empty_resume_writes_default_profile_to_settings_path(settings, tmp_path, capsys):
+    resume = tmp_path / "empty.txt"
+    resume.write_text("", encoding="utf-8")
+    assert sync_profile.main(["--resume", str(resume)]) == 0
+    assert json.loads(settings.profile_path.read_text(encoding="utf-8")) == {
+        "name": "Candidate Profile",
+        "languages": {}, "frameworks": {}, "skills": {}, "keywords": {},
+        "score_saturation": 6.0,
+    }
+    assert f"Wrote {settings.profile_path}" in capsys.readouterr().out
+
+
+def test_cli_with_missing_resume_reports_error_and_writes_nothing(settings, tmp_path, capsys):
+    assert sync_profile.main(["--resume", str(tmp_path / "absent.txt")]) == 1
+    assert "[sync_profile] Error:" in capsys.readouterr().err
+    assert not settings.profile_path.exists()
