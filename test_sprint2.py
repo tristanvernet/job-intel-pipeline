@@ -19,11 +19,8 @@ import worker
 
 
 @pytest.fixture
-def database(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
-    monkeypatch.setattr(worker, "LOCK_PATH", tmp_path / "worker.lock")
+def database():
     db.init_db()
-    return db.DB_PATH
 
 
 def job(id="one"):

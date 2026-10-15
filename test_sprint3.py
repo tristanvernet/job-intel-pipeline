@@ -7,8 +7,7 @@ import db
 import worker
 
 
-def test_rank_before_pagination_and_source_filter(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
+def test_rank_before_pagination_and_source_filter(monkeypatch):
     monkeypatch.setattr(app, "cached_profile", lambda: {})
     monkeypatch.setattr(app, "match_score", lambda row, *a, **kw: 100 if row["id"] == "best" else 0)
     with TestClient(app.app) as client:
@@ -30,8 +29,7 @@ def test_rank_before_pagination_and_source_filter(tmp_path, monkeypatch):
         assert client.get("/api/jobs?limit=0").status_code == 422
 
 
-def test_scraper_liveness_uses_lock_ownership(tmp_path, monkeypatch):
-    monkeypatch.setattr(worker, "LOCK_PATH", tmp_path / "worker.lock")
+def test_scraper_liveness_uses_lock_ownership():
     assert app.scraper_running() is False
     with open(worker.LOCK_PATH, "w") as lock:
         assert app.scraper_running() is False

@@ -136,10 +136,8 @@ def test_build_plist_custom_interval(tmp_path):
 # worker: counts only genuinely new roles for this run
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
-def temp_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
+def temp_db():
     db.init_db()
-    return db
 
 
 def _sample(idx):

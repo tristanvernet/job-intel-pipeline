@@ -3,7 +3,6 @@
 Covers: markdown/parser logic, classifier rules, scout payload mapping, and the
 FastAPI endpoints (against a throwaway temp DB). No network is ever touched.
 """
-import importlib
 import json
 import sqlite3
 from pathlib import Path
@@ -220,12 +219,8 @@ def test_row_to_payload_rejects_unknown_domain():
 # FastAPI endpoints (temp DB)
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
-    test_db = tmp_path / "test_jobs.db"
-    monkeypatch.setattr(db, "DB_PATH", test_db)
-
+def client():
     import app as app_module
-    importlib.reload(app_module)          # rebind get_connection under patched path
 
     db.init_db()
     db.insert_job({
@@ -567,8 +562,7 @@ def test_job_id_stable_under_whitespace_and_case():
     assert a == b
 
 
-def test_insert_job_missing_title_or_url_returns_false(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
+def test_insert_job_missing_title_or_url_returns_false():
     db.init_db()
     # Must return False cleanly -- never raise KeyError.
     assert db.insert_job({"company": "Acme", "url": "https://x.com/1"}) is False
@@ -596,13 +590,10 @@ def test_classify_domain_true_aiml_hits(title):
     assert classify_domain(title) == "AI/ML"
 
 
-def test_run_pipeline_exits_gracefully_when_locked(tmp_path, monkeypatch):
+def test_run_pipeline_exits_gracefully_when_locked(settings, monkeypatch):
     """An active lockfile must stop a second run without scraping anything."""
     import fcntl
     import worker
-
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "jobs.db")
-    monkeypatch.setattr(worker, "LOCK_PATH", tmp_path / "test.lock")
 
     called = []
     monkeypatch.setattr("fetch_github.run_github_fetch",
@@ -610,7 +601,7 @@ def test_run_pipeline_exits_gracefully_when_locked(tmp_path, monkeypatch):
     monkeypatch.setattr("scout.run_scout",
                         lambda: called.append("scout"), raising=False)
 
-    with open(tmp_path / "test.lock", "w") as held:
+    with open(settings.lock_path, "w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
         summary = worker.run_pipeline()
 
