@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 from collector_status import failure_status, summarize
-from config import SETTINGS
+import config
 import sys
 import time
 from typing import Callable, Dict, Optional
@@ -26,8 +26,6 @@ try:
     import fcntl  # POSIX-only; absent on Windows
 except ImportError:  # pragma: no cover - platform guard
     fcntl = None
-
-LOCK_PATH = SETTINGS.lock_path
 
 import db
 import notify
@@ -50,7 +48,7 @@ def _run_step(name: str, fn: Callable) -> dict:
     return result
 
 
-def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[str, object]:
+def run_pipeline(store, lock_path, *, skip_github: bool = False, skip_scout: bool = False) -> Dict[str, object]:
     """Run the collectors and return a summary of newly inserted roles.
 
     Returns a dict with ``new_count``, the sorted list of ``new_ids``, and the
@@ -60,7 +58,7 @@ def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[st
     # race a second launchd fire. Non-blocking flock -> exit cleanly if busy.
     lock_fd = None
     if fcntl is not None:
-        lock_fd = open(LOCK_PATH, "w")
+        lock_fd = open(lock_path, "w")
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -69,19 +67,19 @@ def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[st
             return {"new_count": 0, "new_ids": [], "elapsed": 0.0, "skipped": True}
 
     try:
-        db.init_db()
-        before = db.all_job_ids()
+        store.init()
+        before = store.job_ids()
         started = time.time()
 
         results = []
         if not skip_github:
             import fetch_github
-            results.append(_run_step("fetch_github", lambda: fetch_github.run_github_fetch(db)))
+            results.append(_run_step("fetch_github", lambda: fetch_github.run_github_fetch(store)))
         if not skip_scout:
             import scout
-            results.append(_run_step("scout", lambda: scout.run_scout(db)))
+            results.append(_run_step("scout", lambda: scout.run_scout(store)))
 
-        after = db.all_job_ids()
+        after = store.job_ids()
         new_ids = sorted(after - before)
         elapsed = time.time() - started
         return {**summarize(results), "new_count": len(new_ids), "new_ids": new_ids, "elapsed": elapsed}
@@ -102,10 +100,10 @@ def _window_label(schedule: Optional[Dict[str, object]]) -> str:
     return "this run"
 
 
-def run(interval: Optional[str] = None, notify_enabled: bool = True,
+def run(settings, *, interval: Optional[str] = None, notify_enabled: bool = True,
         skip_github: bool = False, skip_scout: bool = False) -> Dict[str, object]:
     """Full worker run: execute the pipeline and notify about new roles."""
-    config = schedule_mod.load_config()
+    config = schedule_mod.load_config(settings.schedule_config_path)
     schedule = None
     try:
         schedule = schedule_mod.resolve_schedule(config, interval)
@@ -116,7 +114,10 @@ def run(interval: Optional[str] = None, notify_enabled: bool = True,
     if notify_enabled and not config.get("notify", True):
         notify_enabled = False
 
-    summary = run_pipeline(skip_github=skip_github, skip_scout=skip_scout)
+    summary = run_pipeline(
+        db.JobDB(settings.db_path), settings.lock_path,
+        skip_github=skip_github, skip_scout=skip_scout,
+    )
     count = summary["new_count"]
     print(f"\n[worker] {count} genuinely new role(s) inserted "
           f"in {summary['elapsed']:.1f}s")
@@ -161,6 +162,7 @@ def main(argv: Optional[list] = None) -> int:
         run_test_notification()
         return 0
     result = run(
+        config.SETTINGS,
         interval=args.interval,
         notify_enabled=not args.no_notify,
         skip_github=args.skip_github,

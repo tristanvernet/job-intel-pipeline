@@ -230,9 +230,9 @@ def test_migration_adds_status_check(tmp_path, monkeypatch):
                  ("a", "C", "T", "u", "internship", "weird_legacy_status"))
     conn.commit(); conn.close()
 
-    monkeypatch.setattr(db, "DB_PATH", legacy)
-    db.init_db()
-    with db.get_connection() as c:
+    store = db.JobDB(legacy)
+    store.init()
+    with store.connect() as c:
         schema = c.execute("SELECT sql FROM sqlite_master WHERE name='jobs'").fetchone()[0]
         assert "check(statusin(" in schema.lower().replace(" ", "")
         # legacy unknown status normalized to 'new'
@@ -443,12 +443,12 @@ def test_job_id_stable_under_whitespace_and_case():
     assert a == b
 
 
-def test_insert_job_missing_title_or_url_returns_false():
-    db.init_db()
+def test_insert_job_missing_title_or_url_returns_false(store):
+    store.init()
     # Must return False cleanly -- never raise KeyError.
-    assert db.insert_job({"company": "Acme", "url": "https://x.com/1"}) is False
-    assert db.insert_job({"company": "Acme", "title": "SWE"}) is False
-    assert db.insert_job({"company": "Acme", "title": "  ", "url": " "}) is False
+    assert store.insert_job({"company": "Acme", "url": "https://x.com/1"}) is False
+    assert store.insert_job({"company": "Acme", "title": "SWE"}) is False
+    assert store.insert_job({"company": "Acme", "title": "  ", "url": " "}) is False
 
 
 @pytest.mark.parametrize("title", [
@@ -471,7 +471,7 @@ def test_classify_domain_true_aiml_hits(title):
     assert classify_domain(title) == "AI/ML"
 
 
-def test_run_pipeline_exits_gracefully_when_locked(settings, monkeypatch):
+def test_run_pipeline_exits_gracefully_when_locked(settings, monkeypatch, store):
     """An active lockfile must stop a second run without scraping anything."""
     import fcntl
     import worker
@@ -484,7 +484,7 @@ def test_run_pipeline_exits_gracefully_when_locked(settings, monkeypatch):
 
     with open(settings.lock_path, "w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        summary = worker.run_pipeline()
+        summary = worker.run_pipeline(store, settings.lock_path)
 
     assert summary["new_count"] == 0
     assert summary.get("skipped") is True

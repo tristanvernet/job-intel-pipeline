@@ -211,6 +211,9 @@ def run_scout(sink: JobSink, results_per_query: int = 10):
 
 
 if __name__ == "__main__":
-    import db
+    from config import SETTINGS
+    from db import JobDB
 
-    run_scout(db)
+    store = JobDB(SETTINGS.db_path)
+    store.init()
+    run_scout(store)

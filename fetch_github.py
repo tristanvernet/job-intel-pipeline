@@ -256,6 +256,9 @@ def run_github_fetch(sink: JobSink):
 
 
 if __name__ == "__main__":
-    import db
+    from config import SETTINGS
+    from db import JobDB
 
-    run_github_fetch(db)
+    store = JobDB(SETTINGS.db_path)
+    store.init()
+    run_github_fetch(store)

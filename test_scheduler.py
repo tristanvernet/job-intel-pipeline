@@ -5,7 +5,6 @@ import plistlib
 
 import pytest
 
-import db
 from config import ROOT
 import notify
 import schedule as schedule_mod
@@ -136,8 +135,8 @@ def test_build_plist_custom_interval(tmp_path):
 # worker: counts only genuinely new roles for this run
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
-def temp_db():
-    db.init_db()
+def temp_db(store):
+    store.init()
 
 
 def _sample(idx):
@@ -149,9 +148,9 @@ def _sample(idx):
     }
 
 
-def test_run_pipeline_counts_only_new(temp_db, monkeypatch):
+def test_run_pipeline_counts_only_new(temp_db, monkeypatch, store, settings):
     # Pre-existing role should NOT be counted this run.
-    db.insert_job(_sample(0))
+    store.insert_job(_sample(0))
 
     def fake_github(sink):
         sink.insert_job(_sample(1))
@@ -164,12 +163,12 @@ def test_run_pipeline_counts_only_new(temp_db, monkeypatch):
     monkeypatch.setattr("fetch_github.run_github_fetch", fake_github, raising=False)
     monkeypatch.setattr("scout.run_scout", fake_scout, raising=False)
 
-    summary = worker.run_pipeline()
+    summary = worker.run_pipeline(store, settings.lock_path)
     assert summary["new_count"] == 3  # job1, job2, job3 (job0 excluded, job2 once)
     assert set(summary["new_ids"]) == {"job1", "job2", "job3"}
 
 
-def test_run_pipeline_isolates_step_failure(temp_db, monkeypatch):
+def test_run_pipeline_isolates_step_failure(temp_db, monkeypatch, store, settings):
     def boom(sink):
         raise RuntimeError("network down")
 
@@ -179,12 +178,12 @@ def test_run_pipeline_isolates_step_failure(temp_db, monkeypatch):
     monkeypatch.setattr("fetch_github.run_github_fetch", boom, raising=False)
     monkeypatch.setattr("scout.run_scout", fake_scout, raising=False)
 
-    summary = worker.run_pipeline()
+    summary = worker.run_pipeline(store, settings.lock_path)
     assert summary["new_count"] == 1
     assert summary["new_ids"] == ["job9"]
 
 
-def test_run_notifies_with_count(temp_db, monkeypatch):
+def test_run_notifies_with_count(temp_db, monkeypatch, settings):
     sent = {}
 
     def fake_github(sink):
@@ -193,23 +192,23 @@ def test_run_notifies_with_count(temp_db, monkeypatch):
     monkeypatch.setattr("fetch_github.run_github_fetch", fake_github, raising=False)
     monkeypatch.setattr("scout.run_scout", lambda sink: None, raising=False)
     monkeypatch.setattr(worker.schedule_mod, "load_config",
-                        lambda: {"schedule": "weekly", "notify": True})
+                        lambda path: {"schedule": "weekly", "notify": True})
     monkeypatch.setattr(
         worker.notify, "notify_new_roles",
         lambda count, window="this week": sent.update(count=count, window=window) or True)
 
-    worker.run(skip_scout=True)
+    worker.run(settings, skip_scout=True)
     assert sent == {"count": 1, "window": "this week"}
 
 
-def test_run_respects_no_notify(temp_db, monkeypatch):
+def test_run_respects_no_notify(temp_db, monkeypatch, settings):
     called = {"n": 0}
     monkeypatch.setattr("fetch_github.run_github_fetch", lambda sink: None, raising=False)
     monkeypatch.setattr("scout.run_scout", lambda sink: None, raising=False)
-    monkeypatch.setattr(worker.schedule_mod, "load_config", lambda: {})
+    monkeypatch.setattr(worker.schedule_mod, "load_config", lambda path: {})
     monkeypatch.setattr(worker.notify, "notify_new_roles",
                         lambda *a, **k: called.update(n=called["n"] + 1))
-    worker.run(notify_enabled=False)
+    worker.run(settings, notify_enabled=False)
     assert called["n"] == 0
 
 
@@ -225,3 +224,27 @@ def test_test_notification_dry_run(monkeypatch):
 def test_main_test_flag(monkeypatch):
     monkeypatch.setattr(worker.notify, "send_notification", lambda *a, **k: True)
     assert worker.main(["--test"]) == 0
+
+
+def test_install_uses_settings_schedule_path(settings, monkeypatch):
+    settings.schedule_config_path.write_text('{"schedule": "custom", "interval_hours": 3}')
+    installed = []
+    monkeypatch.setattr(setup_schedule, "install", installed.append)
+    assert setup_schedule.main(["install"]) == 0
+    assert installed == [{"schedule": "custom", "interval_hours": 3}]
+
+
+def test_worker_uses_settings_paths(settings, monkeypatch):
+    settings.schedule_config_path.write_text('{"schedule": "daily", "notify": false}')
+    calls = []
+
+    def pipeline(store, lock_path, **kwargs):
+        calls.append((store.path, lock_path, kwargs))
+        return {"new_count": 0, "new_ids": [], "elapsed": 0.0}
+
+    monkeypatch.setattr(worker, "run_pipeline", pipeline)
+    monkeypatch.setattr(worker.notify, "notify_new_roles",
+                        lambda *a, **kw: pytest.fail("notifications disabled in config"))
+    worker.run(settings, skip_github=True, skip_scout=True)
+    assert calls == [(settings.db_path, settings.lock_path,
+                      {"skip_github": True, "skip_scout": True})]

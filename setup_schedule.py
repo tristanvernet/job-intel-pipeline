@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import config
 import schedule as schedule_mod
 
 LABEL = "com.jobintel.scheduler"
@@ -115,8 +116,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "install":
-        config = schedule_mod.load_config()
-        schedule = schedule_mod.resolve_schedule(config, args.interval)
+        settings = config.SETTINGS
+        schedule_config = schedule_mod.load_config(settings.schedule_config_path)
+        schedule = schedule_mod.resolve_schedule(schedule_config, args.interval)
         install(schedule)
     elif args.command == "uninstall":
         uninstall()

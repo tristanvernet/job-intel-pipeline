@@ -9,15 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app
-import db
 import matcher
 import sync_profile
 
 
-def test_cold_start_without_profile_serves_jobs(settings):
+def test_cold_start_without_profile_serves_jobs(settings, store):
     with TestClient(app.app) as client:
         assert client.get("/").status_code == 200
-        db.insert_job({"company": "Example", "title": "Software Engineer",
+        store.insert_job({"company": "Example", "title": "Software Engineer",
                        "url": "https://example.com/job", "track": "full_time"})
         response = client.get("/api/jobs")
         assert response.status_code == 200

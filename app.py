@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 from config import SETTINGS
-from db import init_db, get_connection, VALID_STATUSES, write_transaction, is_busy
+from db import JobDB, VALID_STATUSES, is_busy
 from prep import get_prep_provider
 import matcher
 
+DB = JobDB(SETTINGS.db_path)
 PROFILE_FILE = matcher.ProfileFile(SETTINGS.profile_path)
 
 
@@ -29,7 +30,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    DB.init()
     yield
 
 
@@ -42,7 +43,7 @@ def get_db():
     `with conn:` only commits/rolls back -- it never closes. Relying on GC to
     release the handle leaks a file descriptor per request under uvicorn.
     """
-    conn = get_connection()
+    conn = DB.connect()
     try:
         yield conn
     finally:
@@ -129,7 +130,7 @@ def scraper_running():
     if worker.fcntl is None:
         return None
     try:
-        with open(worker.LOCK_PATH, "r") as lock:
+        with open(SETTINGS.lock_path, "r") as lock:
             try:
                 worker.fcntl.flock(lock, worker.fcntl.LOCK_SH | worker.fcntl.LOCK_NB)
             except BlockingIOError:
@@ -176,7 +177,7 @@ def analytics(conn=Depends(get_db)):
 
 def write_mutation(operation):
     try:
-        return write_transaction(operation)
+        return DB.write(operation)
     except sqlite3.OperationalError as exc:
         if is_busy(exc):
             raise HTTPException(503, "Database busy; retry shortly", headers={"Retry-After": "1"}) from exc

@@ -4,11 +4,10 @@ from contextlib import closing
 from fastapi.testclient import TestClient
 
 import app
-import db
 import worker
 
 
-def test_rank_before_pagination_and_source_filter(settings):
+def test_rank_before_pagination_and_source_filter(settings, store):
     settings.profile_path.write_text(json.dumps({"keywords": {"wizard": 1}}), encoding="utf-8")
     with TestClient(app.app) as client:
         def seed(conn):
@@ -17,7 +16,7 @@ def test_rank_before_pagination_and_source_filter(settings):
                 [(f"low{i:03}", "C", "Engineer", "https://example.com", "full_time", "board", "2026-09-06") for i in range(501)]
                 + [("best", "C", "Wizard Engineer", "https://example.com", "full_time", "curated", "2000-01-01")],
             )
-        db.write_transaction(seed)
+        store.write(seed)
         ranked = client.get("/api/jobs").json()
         assert len(ranked) == 500
         assert ranked[0]["id"] == "best"
@@ -29,9 +28,9 @@ def test_rank_before_pagination_and_source_filter(settings):
         assert client.get("/api/jobs?limit=0").status_code == 422
 
 
-def test_scraper_liveness_uses_lock_ownership():
+def test_scraper_liveness_uses_lock_ownership(settings):
     assert app.scraper_running() is False
-    with open(worker.LOCK_PATH, "w") as lock:
+    with open(settings.lock_path, "w") as lock:
         assert app.scraper_running() is False
         worker.fcntl.flock(lock, worker.fcntl.LOCK_EX | worker.fcntl.LOCK_NB)
         assert app.scraper_running() is True

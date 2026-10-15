@@ -18,10 +18,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from config import SETTINGS
-
-CONFIG_PATH = SETTINGS.schedule_config_path
-
 # launchd Weekday: 0 and 7 are both Sunday, 1 = Monday ... 6 = Saturday.
 _WEEKDAYS = {
     "sunday": 0, "sun": 0,
@@ -42,9 +38,9 @@ DEFAULT_MINUTE = 0
 DEFAULT_WEEKDAY = 1  # Monday
 
 
-def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
+def load_config(path: Path) -> Dict[str, Any]:
     """Load schedule_config.json, returning {} when it does not exist."""
-    path = Path(path) if path else CONFIG_PATH
+    path = Path(path)
     if not path.exists():
         return {}
     with open(path, "r", encoding="utf-8") as fh:

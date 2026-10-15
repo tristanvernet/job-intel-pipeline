@@ -4,8 +4,7 @@ import socket
 
 import pytest
 
-# The path globals read os.environ at import, so an exported JOBINTEL_* must be
-# gone before any test module imports them.
+# Settings read os.environ at import, before per-test fixtures can replace them.
 for _name in [n for n in os.environ if n.startswith("JOBINTEL_")]:
     del os.environ[_name]
 
@@ -13,9 +12,6 @@ import app  # noqa: E402
 import config  # noqa: E402
 import db  # noqa: E402
 import matcher  # noqa: E402
-import schedule  # noqa: E402
-import sync_profile  # noqa: E402
-import worker  # noqa: E402
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex
@@ -85,8 +81,12 @@ def settings(tmp_path, monkeypatch):
         monkeypatch.setenv(name, value)
     current = config.Settings.from_env(env)
     monkeypatch.setattr(config, "SETTINGS", current)
-    monkeypatch.setattr(db, "DB_PATH", current.db_path)
+    monkeypatch.setattr(app, "DB", db.JobDB(current.db_path))
+    monkeypatch.setattr(app, "SETTINGS", current)
     monkeypatch.setattr(app, "PROFILE_FILE", matcher.ProfileFile(current.profile_path))
-    monkeypatch.setattr(worker, "LOCK_PATH", current.lock_path)
-    monkeypatch.setattr(schedule, "CONFIG_PATH", current.schedule_config_path)
     return current
+
+
+@pytest.fixture
+def store(settings):
+    return db.JobDB(settings.db_path)

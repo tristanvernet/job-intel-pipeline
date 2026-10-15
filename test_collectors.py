@@ -131,13 +131,13 @@ def test_github_fetch_through_the_real_db_counts_a_check_violation_as_rejected(g
 
 
 @pytest.mark.parametrize("field", ["track", "domain"])
-def test_db_check_violation_raises_rejected_job(field):
-    db.init_db()
+def test_db_check_violation_raises_rejected_job(field, store):
+    store.init()
     job = dict(id="one", company="Example", title="Software Engineer",
                url="https://example.com/job", track="full_time", domain="SWE")
     with pytest.raises(RejectedJob):
-        db.insert_job({**job, field: "invalid"})
-    assert db.insert_job(job) is True
+        store.insert_job({**job, field: "invalid"})
+    assert store.insert_job(job) is True
 
 
 def _is_main_guard(node):
