@@ -3,40 +3,15 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import sqlite3
-import logging
 from pathlib import Path
-from threading import Lock
 from typing import Optional
 
 from config import SETTINGS
 from db import init_db, get_connection, VALID_STATUSES, write_transaction, is_busy
 from prep import get_prep_provider
-from matcher import PROFILE_PATH, default_profile, explain, flatten_terms, load_profile, match_score
+import matcher
 
-# Profile cache keyed on profile.json mtime: avoids re-reading and re-parsing
-# the file on every API request while still picking up hand edits instantly.
-_PROFILE_LOCK = Lock()
-_PROFILE_CACHE: Optional[tuple[Optional[int], dict]] = None
-logger = logging.getLogger(__name__)
-
-
-def cached_profile() -> dict:
-    global _PROFILE_CACHE
-    with _PROFILE_LOCK:
-        try:
-            try:
-                mtime = PROFILE_PATH.stat().st_mtime_ns
-            except FileNotFoundError:
-                mtime = None
-            if _PROFILE_CACHE is None or _PROFILE_CACHE[0] != mtime:
-                candidate = load_profile(PROFILE_PATH)
-                _PROFILE_CACHE = (mtime, candidate)
-        except (OSError, ValueError) as exc:
-            logger.warning("Could not reload profile; retaining last good profile: %s", exc)
-            if _PROFILE_CACHE is None:
-                # Do not cache a failed file's mtime: retry when it is repaired.
-                _PROFILE_CACHE = (None, default_profile())
-        return _PROFILE_CACHE[1]
+PROFILE_FILE = matcher.ProfileFile(SETTINGS.profile_path)
 
 
 # Columns the list view actually renders; raw_description (KBs per row) is
@@ -113,17 +88,9 @@ def list_jobs(
     query += " ORDER BY date_discovered DESC, id ASC"
 
     rows = [dict(r) for r in conn.execute(query, params).fetchall()]
-
-    # Attach a deterministic 0-100 match score to every job, then sort the
-    # Inbox (and every view) by score descending. The fetch above is already
-    # date-descending, so this stable sort keeps newest-first within ties.
-    profile = cached_profile()
-    terms = flatten_terms(profile)
-    for row in rows:
-        row["match_score"] = match_score(row, profile, _terms=terms)
-    if sort != "date_desc":  # default score_desc; fetch is already date-desc
-        rows.sort(key=lambda r: r["match_score"], reverse=True)
-    return rows[offset:offset + limit]
+    # The fetch is date-descending, so the stable score sort keeps newest-first within ties.
+    ranked = matcher.rank(rows, PROFILE_FILE.current(), by_score=sort != "date_desc")
+    return ranked[offset:offset + limit]
 
 
 @app.get("/api/jobs/{job_id}")
@@ -136,18 +103,7 @@ def job_detail(job_id: str, conn=Depends(get_db)):
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    job = dict(row)
-    profile = cached_profile()
-    terms = flatten_terms(profile)
-    info = explain(job, profile)
-    matched = info["matched_terms"]
-    job["match_score"] = info["score"]
-    job["match"] = {
-        "matched_terms": matched,
-        "missing_terms": {t: w for t, w in terms.items() if t not in matched},
-        "matched_weight": info["matched_weight"],
-    }
-    return job
+    return matcher.with_match(dict(row), PROFILE_FILE.current())
 
 
 @app.get("/api/stats")

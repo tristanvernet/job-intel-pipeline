@@ -24,27 +24,29 @@ def test_cold_start_without_profile_serves_jobs(settings):
         assert isinstance(response.json()[0]["match_score"], int)
         assert client.get("/api/jobs/" + response.json()[0]["id"]).status_code == 200
     assert not settings.profile_path.exists()
-    assert app.cached_profile() == matcher.default_profile()
+    assert app.PROFILE_FILE.current() == matcher.default_profile()
 
 
 def test_corrupt_reload_retains_snapshot_then_recovers(settings, caplog):
+    source = matcher.ProfileFile(settings.profile_path)
     sync_profile.save_profile({"languages": {"python": 2}}, settings.profile_path)
-    original = app.cached_profile()
-    snapshot = app._PROFILE_CACHE
+    original = source.current()
+    snapshot = source._snapshot
     settings.profile_path.write_text('{"languages":', encoding="utf-8")
-    assert app.cached_profile() is original
-    assert app._PROFILE_CACHE is snapshot
+    assert source.current() is original
+    assert source._snapshot is snapshot
     assert "retaining last good profile" in caplog.text
     sync_profile.save_profile({"languages": {"rust": 3}}, settings.profile_path)
-    assert app.cached_profile() == {"languages": {"rust": 3}}
+    assert source.current() == {"languages": {"rust": 3}}
     assert original == {"languages": {"python": 2}}
 
 
 def test_cold_start_corrupt_profile_uses_default(settings):
+    source = matcher.ProfileFile(settings.profile_path)
     settings.profile_path.write_text("[]", encoding="utf-8")
-    assert app.cached_profile() == matcher.default_profile()
+    assert source.current() == matcher.default_profile()
     sync_profile.save_profile({"keywords": {"engineer": 1}}, settings.profile_path)
-    assert app.cached_profile() == {"keywords": {"engineer": 1}}
+    assert source.current() == {"keywords": {"engineer": 1}}
 
 
 def test_concurrent_cache_readers_publish_one_complete_snapshot(settings, monkeypatch):
@@ -56,9 +58,10 @@ def test_concurrent_cache_readers_publish_one_complete_snapshot(settings, monkey
         calls.append(path)
         return original(path)
 
-    monkeypatch.setattr(app, "load_profile", load)
+    monkeypatch.setattr(matcher, "load_profile", load)
+    source = matcher.ProfileFile(settings.profile_path)
     with ThreadPoolExecutor(max_workers=8) as executor:
-        profiles = list(executor.map(lambda _: app.cached_profile(), range(40)))
+        profiles = list(executor.map(lambda _: source.current(), range(40)))
     assert len(calls) == 1
     assert all(profile is profiles[0] for profile in profiles)
     assert profiles[0] == {"languages": {"python": 2}}

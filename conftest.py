@@ -86,9 +86,7 @@ def settings(tmp_path, monkeypatch):
     current = config.Settings.from_env(env)
     monkeypatch.setattr(config, "SETTINGS", current)
     monkeypatch.setattr(db, "DB_PATH", current.db_path)
-    monkeypatch.setattr(matcher, "PROFILE_PATH", current.profile_path)
-    monkeypatch.setattr(app, "PROFILE_PATH", current.profile_path)
-    monkeypatch.setattr(app, "_PROFILE_CACHE", None)
+    monkeypatch.setattr(app, "PROFILE_FILE", matcher.ProfileFile(current.profile_path))
     monkeypatch.setattr(worker, "LOCK_PATH", current.lock_path)
     monkeypatch.setattr(schedule, "CONFIG_PATH", current.schedule_config_path)
     return current

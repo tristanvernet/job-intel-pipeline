@@ -1,3 +1,4 @@
+import json
 from contextlib import closing
 
 from fastapi.testclient import TestClient
@@ -7,15 +8,14 @@ import db
 import worker
 
 
-def test_rank_before_pagination_and_source_filter(monkeypatch):
-    monkeypatch.setattr(app, "cached_profile", lambda: {})
-    monkeypatch.setattr(app, "match_score", lambda row, *a, **kw: 100 if row["id"] == "best" else 0)
+def test_rank_before_pagination_and_source_filter(settings):
+    settings.profile_path.write_text(json.dumps({"keywords": {"wizard": 1}}), encoding="utf-8")
     with TestClient(app.app) as client:
         def seed(conn):
             conn.executemany(
                 "INSERT INTO jobs(id,company,title,url,track,source,date_discovered) VALUES(?,?,?,?,?,?,?)",
                 [(f"low{i:03}", "C", "Engineer", "https://example.com", "full_time", "board", "2026-09-06") for i in range(501)]
-                + [("best", "C", "Engineer", "https://example.com", "full_time", "curated", "2000-01-01")],
+                + [("best", "C", "Wizard Engineer", "https://example.com", "full_time", "curated", "2000-01-01")],
             )
         db.write_transaction(seed)
         ranked = client.get("/api/jobs").json()

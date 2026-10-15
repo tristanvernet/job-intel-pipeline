@@ -9,20 +9,23 @@ it is trivially testable and safe to call on every API request.
 
 Public surface:
     default_profile() -> dict
-    load_profile(path=None) -> dict
-    match_score(job, profile=None) -> int        # 0..100
-    explain(job, profile=None) -> dict            # matched terms + raw weight
+    load_profile(path) -> dict
+    match_score(job, profile) -> int              # 0..100
+    explain(job, profile) -> dict                 # matched terms + raw weight
+    rank(rows, profile, *, by_score) -> list      # rows plus match_score
+    with_match(job, profile) -> dict              # job plus score breakdown
+    ProfileFile(path).current() -> dict           # mtime-cached profile file
 """
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from threading import Lock
+from typing import Any, Dict, List, Optional
 
-from config import SETTINGS
-
-PROFILE_PATH = SETTINGS.profile_path
+logger = logging.getLogger(__name__)
 
 # Sections of the profile that contribute weighted terms, in flatten order.
 _WEIGHTED_SECTIONS = ("languages", "frameworks", "skills", "keywords")
@@ -50,15 +53,14 @@ def default_profile() -> Dict[str, Any]:
     }
 
 
-def load_profile(path: Optional[str | Path] = None) -> Dict[str, Any]:
+def load_profile(path: str | Path) -> Dict[str, Any]:
     """Load a profile from disk, falling back to a safe default.
 
     Never raises for a missing file. Invalid JSON or a non-object document
     raises ValueError so cache callers can retain a last-known-good snapshot.
     """
-    p = Path(path) if path is not None else PROFILE_PATH
     try:
-        with open(p, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             profile = json.load(fh)
     except FileNotFoundError:
         # Open directly: the file can disappear between exists() and open().
@@ -124,20 +126,13 @@ def role_text(job: Dict[str, Any]) -> str:
     return " ".join(_normalize(job.get(f)) for f in _ROLE_FIELDS)
 
 
-def match_score(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None,
+def match_score(job: Dict[str, Any], profile: Dict[str, Any],
                 _terms: Optional[Dict[str, float]] = None) -> int:
     """Return a deterministic 0-100 fit score for `job` against `profile`.
 
     Score = 100 * min(1, matched_weight / saturation), rounded to an int.
     An empty/None job or a profile with no matches yields 0.
-
-    Bulk callers (e.g. /api/jobs scoring hundreds of rows) should pass
-    ``_terms=flatten_terms(profile)`` so the weighted-term map is built once
-    instead of once per job.
     """
-    if profile is None:
-        profile = load_profile()
-
     text_norm = role_text(job or {})
     tokens = tokenize(text_norm)
     terms = _terms if _terms is not None else flatten_terms(profile)
@@ -159,10 +154,8 @@ def match_score(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None,
     return max(0, min(100, score))
 
 
-def explain(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def explain(job: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
     """Return the matched terms and raw weight behind a score (for debugging)."""
-    if profile is None:
-        profile = load_profile()
     text_norm = role_text(job or {})
     tokens = tokenize(text_norm)
     terms = flatten_terms(profile)
@@ -172,3 +165,59 @@ def explain(job: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> Di
         "matched_terms": dict(sorted(matched.items(), key=lambda kv: (-kv[1], kv[0]))),
         "matched_weight": round(sum(matched.values()), 4),
     }
+
+
+def rank(rows: List[Dict[str, Any]], profile: Dict[str, Any], *, by_score: bool) -> List[Dict[str, Any]]:
+    """Return copies of `rows` with match_score attached, best first when `by_score`.
+
+    The sort is stable, so rows with equal scores keep their input order.
+    """
+    terms = flatten_terms(profile)
+    ranked = [{**row, "match_score": match_score(row, profile, _terms=terms)} for row in rows]
+    if by_score:
+        ranked.sort(key=lambda r: r["match_score"], reverse=True)
+    return ranked
+
+
+def with_match(job: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Return `job` plus its match_score and the matched vs. missing profile terms."""
+    info = explain(job, profile)
+    matched = info["matched_terms"]
+    return {
+        **job,
+        "match_score": info["score"],
+        "match": {
+            "matched_terms": matched,
+            "missing_terms": {t: w for t, w in flatten_terms(profile).items() if t not in matched},
+            "matched_weight": info["matched_weight"],
+        },
+    }
+
+
+class ProfileFile:
+    """A profile file re-read only when its mtime changes.
+
+    A failed reload keeps serving the last good snapshot so a half-edited file
+    never breaks scoring.
+    """
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self._lock = Lock()
+        self._snapshot: Optional[tuple[Optional[int], Dict[str, Any]]] = None
+
+    def current(self) -> Dict[str, Any]:
+        with self._lock:
+            try:
+                try:
+                    mtime = self.path.stat().st_mtime_ns
+                except FileNotFoundError:
+                    mtime = None
+                if self._snapshot is None or self._snapshot[0] != mtime:
+                    self._snapshot = (mtime, load_profile(self.path))
+            except (OSError, ValueError) as exc:
+                logger.warning("Could not reload profile; retaining last good profile: %s", exc)
+                if self._snapshot is None:
+                    # Do not record a failed file's mtime: retry when it is repaired.
+                    self._snapshot = (None, default_profile())
+            return self._snapshot[1]
