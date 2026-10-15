@@ -161,7 +161,7 @@ def explain(job: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
     terms = flatten_terms(profile)
     matched = {t: w for t, w in terms.items() if _term_matches(t, tokens, text_norm)}
     return {
-        "score": match_score(job, profile),
+        "score": match_score(job, profile, _terms=terms),
         "matched_terms": dict(sorted(matched.items(), key=lambda kv: (-kv[1], kv[0]))),
         "matched_weight": round(sum(matched.values()), 4),
     }

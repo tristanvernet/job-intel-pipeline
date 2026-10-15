@@ -302,11 +302,11 @@ def build_profile(
     github: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Merge resume text and/or a GitHub username's weights into a copy of `base`."""
-    if not resume_text and not github:
+    if resume_text is None and not github:
         raise ValueError("Provide at least one of --resume or --github.")
 
     profile = base
-    if resume_text:
+    if resume_text is not None:
         profile = merge_sections(profile, scan_text_for_tech(resume_text))
 
     if github:
