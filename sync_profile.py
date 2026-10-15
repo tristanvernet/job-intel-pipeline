@@ -32,7 +32,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from threading import Lock
 
-from matcher import PROFILE_PATH, _WEIGHTED_SECTIONS, tokenize
+import config
+from matcher import _DEFAULT_SATURATION, _WEIGHTED_SECTIONS, tokenize
 
 # --------------------------------------------------------------------------- #
 # Known technology vocabulary. Multi-word / symbol terms are matched as phrases.
@@ -66,8 +67,6 @@ _SECTION_VOCAB = {
 
 # GitHub language name -> our canonical language key.
 _GH_LANG_ALIASES = {"go": "go", "golang": "go", "c++": "c++", "c#": "c#"}
-
-_DEFAULT_SATURATION = 6.0
 
 
 # --------------------------------------------------------------------------- #
@@ -297,19 +296,18 @@ def save_profile(profile: Dict[str, Any], path: str | Path) -> None:
 
 
 def build_profile(
+    base: Dict[str, Any],
+    *,
     resume: Optional[str] = None,
     github: Optional[str] = None,
-    profile_path: str | Path = PROFILE_PATH,
 ) -> Dict[str, Any]:
-    """Build an updated profile from a resume and/or GitHub username."""
+    """Merge resume text and/or a GitHub username's weights into a copy of `base`."""
     if not resume and not github:
         raise ValueError("Provide at least one of --resume or --github.")
 
-    profile = load_existing_profile(profile_path)
-
+    profile = base
     if resume:
-        text = extract_text_from_resume(resume)
-        profile = merge_sections(profile, scan_text_for_tech(text))
+        profile = merge_sections(profile, scan_text_for_tech(resume))
 
     if github:
         profile = merge_sections(profile, fetch_github_profile(github))
@@ -322,22 +320,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--resume", help="Path to a resume (.txt/.md/.pdf/.docx).")
     parser.add_argument("--github", help="GitHub username to derive tech weights from.")
     parser.add_argument(
-        "--out", default=str(PROFILE_PATH), help="Output profile path (default: profile.json)."
+        "--out", help="Output profile path (default: JOBINTEL_PROFILE_PATH, else profile.json)."
     )
     args = parser.parse_args(argv)
 
     if not args.resume and not args.github:
         parser.error("Provide at least one of --resume or --github.")
 
+    out = args.out or config.SETTINGS.profile_path
     try:
-        profile = build_profile(resume=args.resume, github=args.github, profile_path=args.out)
+        base = load_existing_profile(out)
+        resume = extract_text_from_resume(args.resume) if args.resume else None
+        profile = build_profile(base, resume=resume, github=args.github)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"[sync_profile] Error: {exc}", file=sys.stderr)
         return 1
 
-    save_profile(profile, args.out)
+    save_profile(profile, out)
     counts = {s: len(profile.get(s) or {}) for s in _WEIGHTED_SECTIONS}
-    print(f"[sync_profile] Wrote {args.out}")
+    print(f"[sync_profile] Wrote {out}")
     print(f"[sync_profile] Terms per section: {counts}")
     return 0
 

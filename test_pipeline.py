@@ -395,7 +395,10 @@ def test_build_profile_from_resume(tmp_path):
     resume = tmp_path / "resume.md"
     resume.write_text("# Resume\nPython and Java backend engineer. FastAPI, Spring, systems.")
     out = tmp_path / "profile.json"
-    profile = sync_profile.build_profile(resume=str(resume), profile_path=out)
+    profile = sync_profile.build_profile(
+        sync_profile.load_existing_profile(out),
+        resume=sync_profile.extract_text_from_resume(resume),
+    )
     assert "python" in profile["languages"]
     assert "java" in profile["languages"]
     sync_profile.save_profile(profile, out)
@@ -408,7 +411,7 @@ def test_build_profile_from_resume(tmp_path):
 
 def test_build_profile_requires_a_source():
     with pytest.raises(ValueError):
-        sync_profile.build_profile()
+        sync_profile.build_profile({})
 
 
 def test_extract_text_missing_file():
@@ -491,9 +494,6 @@ def test_run_pipeline_exits_gracefully_when_locked(settings, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Profile sync: monotonicity (manual tuning never downgraded) and idempotence.
 # --------------------------------------------------------------------------- #
-def _write_resume(path, text):
-    path.write_text(text, encoding="utf-8")
-    return str(path)
 
 
 def test_merge_sections_never_downgrades_existing_weight():
@@ -507,20 +507,17 @@ def test_merge_sections_never_downgrades_existing_weight():
 
 def test_build_profile_is_idempotent(tmp_path):
     """Re-syncing the same resume must yield the identical profile."""
-    resume = _write_resume(
-        tmp_path / "resume.txt",
-        "Python python python FastAPI backend engineer. Docker and SQL.",
-    )
+    resume = "Python python python FastAPI backend engineer. Docker and SQL."
     profile_path = tmp_path / "profile.json"
-    first = sync_profile.build_profile(resume=resume, profile_path=profile_path)
+    first = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume=resume)
     sync_profile.save_profile(first, profile_path)
-    second = sync_profile.build_profile(resume=resume, profile_path=profile_path)
+    second = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume=resume)
     assert first == second
 
 
 def test_build_profile_preserves_manual_weights(tmp_path):
     """A hand-tuned high weight must survive a sync that detects a lower one."""
-    resume = _write_resume(tmp_path / "resume.txt", "Some python experience.")
+    resume = "Some python experience."
     profile_path = tmp_path / "profile.json"
     sync_profile.save_profile(
         {"name": "Candidate Profile",
@@ -529,5 +526,5 @@ def test_build_profile_preserves_manual_weights(tmp_path):
          "score_saturation": 4.0},
         profile_path,
     )
-    updated = sync_profile.build_profile(resume=resume, profile_path=profile_path)
+    updated = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume=resume)
     assert updated["languages"]["python"] == 1.0
