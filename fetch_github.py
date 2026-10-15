@@ -1,9 +1,7 @@
 import re
 import requests
-import sqlite3
 import json
-from collector_status import failure_status
-from db import insert_job
+from collector_status import JobSink, failure_status
 from classifier import is_unwanted_role, classify_track, classify_domain
 
 # Raw Markdown source lists for early-career roles
@@ -214,7 +212,7 @@ def parse_markdown_table(content: str, default_track: str, term_hint: str, stats
     return payloads, skipped
 
 
-def run_github_fetch():
+def run_github_fetch(sink: JobSink):
     """Fetch all curated sources. Returns a per-source outcome report.
 
     Each entry is {"source", "ok", "added", "skipped", "error"} so callers can
@@ -241,9 +239,9 @@ def run_github_fetch():
                     outcome.update(status="failed", error="No recognizable source rows")
                 for payload in payloads:
                     try:
-                        if insert_job(payload):
+                        if sink.insert_job(payload):
                             outcome["inserted"] += 1
-                    except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
+                    except (ValueError, TypeError) as exc:
                         outcome["rejected"] += 1
                         outcome.update(status="partial", error=str(exc))
         except Exception as exc:
@@ -255,7 +253,3 @@ def run_github_fetch():
         outcomes.append(outcome)
         print(json.dumps(outcome, sort_keys=True))
     return outcomes
-
-
-if __name__ == "__main__":
-    run_github_fetch()

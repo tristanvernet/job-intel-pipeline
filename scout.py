@@ -1,14 +1,12 @@
 import random
 import time
-import sqlite3
 from urllib.parse import urlsplit
 
 import pandas as pd
 from pandas.api.types import is_scalar
-from collector_status import failure_status, summarize
+from collector_status import JobSink, failure_status, summarize
 
 from jobspy import scrape_jobs
-from db import insert_job
 from classifier import is_unwanted_role, classify_track, classify_domain
 
 # Primary boards that tolerate steady scraping.
@@ -122,7 +120,7 @@ def validate_payload(payload):
         raise ValueError("Invalid domain")
 
 
-def _ingest(jobs_df, default_track: str, counters: dict):
+def _ingest(jobs_df, default_track: str, counters: dict, sink: JobSink):
     """Convert and insert a jobspy result frame; update shared counters."""
     if jobs_df is None or jobs_df.empty:
         return
@@ -136,11 +134,11 @@ def _ingest(jobs_df, default_track: str, counters: dict):
                 counters["skipped"] += 1
                 continue
             validate_payload(payload)
-            if insert_job(payload):
+            if sink.insert_job(payload):
                 counters["added"] += 1
             else:
                 counters["duplicates"] += 1
-        except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
+        except (ValueError, TypeError) as exc:
             counters["rejected"] += 1
             print(f"  Rejected row: {exc}")
         # Infrastructure failures (including exhausted BUSY) escape to the
@@ -171,7 +169,7 @@ def _jobspy_options(site: str, query: str, *, results_wanted: int, is_remote: bo
     return options
 
 
-def run_scout(results_per_query: int = 10):
+def run_scout(sink: JobSink, results_per_query: int = 10):
     outcomes = []
     blocked_sites = set()
     for item in SEARCH_QUERIES:
@@ -188,7 +186,7 @@ def run_scout(results_per_query: int = 10):
                 if site == "linkedin":
                     time.sleep(random.uniform(2.0, 5.0))
                 jobs_df = scrape_jobs(**options)
-                _ingest(jobs_df, item["default_track"], counters)
+                _ingest(jobs_df, item["default_track"], counters, sink)
                 if counters["rejected"]:
                     result["status"] = "partial"
             except Exception as exc:
@@ -205,7 +203,3 @@ def run_scout(results_per_query: int = 10):
     report = summarize(outcomes)
     print(f"Scout complete: {report}")
     return report
-
-
-if __name__ == "__main__":
-    run_scout()

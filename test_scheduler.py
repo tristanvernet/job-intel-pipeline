@@ -153,13 +153,13 @@ def test_run_pipeline_counts_only_new(temp_db, monkeypatch):
     # Pre-existing role should NOT be counted this run.
     db.insert_job(_sample(0))
 
-    def fake_github():
-        db.insert_job(_sample(1))
-        db.insert_job(_sample(2))
+    def fake_github(sink):
+        sink.insert_job(_sample(1))
+        sink.insert_job(_sample(2))
 
-    def fake_scout():
-        db.insert_job(_sample(2))  # duplicate of github insert -> not new
-        db.insert_job(_sample(3))
+    def fake_scout(sink):
+        sink.insert_job(_sample(2))  # duplicate of github insert -> not new
+        sink.insert_job(_sample(3))
 
     monkeypatch.setattr("fetch_github.run_github_fetch", fake_github, raising=False)
     monkeypatch.setattr("scout.run_scout", fake_scout, raising=False)
@@ -170,11 +170,11 @@ def test_run_pipeline_counts_only_new(temp_db, monkeypatch):
 
 
 def test_run_pipeline_isolates_step_failure(temp_db, monkeypatch):
-    def boom():
+    def boom(sink):
         raise RuntimeError("network down")
 
-    def fake_scout():
-        db.insert_job(_sample(9))
+    def fake_scout(sink):
+        sink.insert_job(_sample(9))
 
     monkeypatch.setattr("fetch_github.run_github_fetch", boom, raising=False)
     monkeypatch.setattr("scout.run_scout", fake_scout, raising=False)
@@ -187,11 +187,11 @@ def test_run_pipeline_isolates_step_failure(temp_db, monkeypatch):
 def test_run_notifies_with_count(temp_db, monkeypatch):
     sent = {}
 
-    def fake_github():
-        db.insert_job(_sample(1))
+    def fake_github(sink):
+        sink.insert_job(_sample(1))
 
     monkeypatch.setattr("fetch_github.run_github_fetch", fake_github, raising=False)
-    monkeypatch.setattr("scout.run_scout", lambda: None, raising=False)
+    monkeypatch.setattr("scout.run_scout", lambda sink: None, raising=False)
     monkeypatch.setattr(worker.schedule_mod, "load_config",
                         lambda: {"schedule": "weekly", "notify": True})
     monkeypatch.setattr(
@@ -204,8 +204,8 @@ def test_run_notifies_with_count(temp_db, monkeypatch):
 
 def test_run_respects_no_notify(temp_db, monkeypatch):
     called = {"n": 0}
-    monkeypatch.setattr("fetch_github.run_github_fetch", lambda: None, raising=False)
-    monkeypatch.setattr("scout.run_scout", lambda: None, raising=False)
+    monkeypatch.setattr("fetch_github.run_github_fetch", lambda sink: None, raising=False)
+    monkeypatch.setattr("scout.run_scout", lambda sink: None, raising=False)
     monkeypatch.setattr(worker.schedule_mod, "load_config", lambda: {})
     monkeypatch.setattr(worker.notify, "notify_new_roles",
                         lambda *a, **k: called.update(n=called["n"] + 1))

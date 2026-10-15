@@ -76,10 +76,10 @@ def run_pipeline(skip_github: bool = False, skip_scout: bool = False) -> Dict[st
         results = []
         if not skip_github:
             import fetch_github
-            results.append(_run_step("fetch_github", fetch_github.run_github_fetch))
+            results.append(_run_step("fetch_github", lambda: fetch_github.run_github_fetch(db)))
         if not skip_scout:
             import scout
-            results.append(_run_step("scout", scout.run_scout))
+            results.append(_run_step("scout", lambda: scout.run_scout(db)))
 
         after = db.all_job_ids()
         new_ids = sorted(after - before)

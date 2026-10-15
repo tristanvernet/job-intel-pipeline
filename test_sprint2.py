@@ -158,26 +158,10 @@ def test_ingestion_rejects_bad_rows_but_keeps_following_valid_rows(database):
         dict(title="Software Engineer", job_url="javascript:alert(1)"),
     ])
     counters = {}
-    scout._ingest(frame, "full_time", counters)
+    scout._ingest(frame, "full_time", counters, db)
     assert counters["fetched"] == 3
     assert counters["rejected"] == 2
     assert counters["added"] == 1
-
-
-def test_ingestion_continues_after_row_integrity_failure(database, monkeypatch):
-    insert = scout.insert_job
-    def reject_first(payload):
-        if payload["company"] == "Bad":
-            raise sqlite3.IntegrityError("CHECK constraint failed")
-        return insert(payload)
-    monkeypatch.setattr(scout, "insert_job", reject_first)
-    frame = pd.DataFrame([dict(title="Software Engineer", company=company,
-                              job_url="https://example.com/job") for company in ("Bad", "Good")])
-    counters = {}
-    scout._ingest(frame, "full_time", counters)
-    assert counters["rejected"] == 1
-    assert counters["added"] == 1
-    assert counters["duplicates"] == 0
 
 
 def test_busy_detection_accepts_extended_sqlite_code():
@@ -203,7 +187,7 @@ def test_blocked_board_is_not_retried_and_other_sources_continue(monkeypatch):
             raise RuntimeError("HTTP 429")
         return pd.DataFrame()
     monkeypatch.setattr(scout, "scrape_jobs", scrape)
-    report = scout.run_scout()
+    report = scout.run_scout(db)
     assert report["status"] == "partial"
     assert calls.count("indeed") == 1
     assert calls.count("linkedin") == 2

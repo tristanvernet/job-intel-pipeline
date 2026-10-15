@@ -478,9 +478,9 @@ def test_run_pipeline_exits_gracefully_when_locked(settings, monkeypatch):
 
     called = []
     monkeypatch.setattr("fetch_github.run_github_fetch",
-                        lambda: called.append("github"), raising=False)
+                        lambda sink: called.append("github"), raising=False)
     monkeypatch.setattr("scout.run_scout",
-                        lambda: called.append("scout"), raising=False)
+                        lambda sink: called.append("scout"), raising=False)
 
     with open(settings.lock_path, "w") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
