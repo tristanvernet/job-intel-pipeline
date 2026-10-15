@@ -110,7 +110,7 @@ def test_github_sink_failure_ends_the_source(github_source, error):
     assert sink.attempts == 1
 
 
-def test_github_fetch_through_the_real_db_counts_a_check_violation_as_rejected(github_source, monkeypatch):
+def test_github_fetch_through_the_real_db_counts_a_check_violation_as_rejected(github_source, monkeypatch, store):
     def payloads(content, default_track, term_hint, stats=None):
         rows = [
             {"company": "Acme", "title": "Software Engineer Intern", "url": "https://acme.example/1",
@@ -123,11 +123,11 @@ def test_github_fetch_through_the_real_db_counts_a_check_violation_as_rejected(g
         stats.update(total_rows=3, kept=3, skipped=0, reasons={})
         return rows, 0
     monkeypatch.setattr(fetch_github, "parse_markdown_table", payloads)
-    db.init_db()
-    [outcome] = fetch_github.run_github_fetch(db)
+    store.init()
+    [outcome] = fetch_github.run_github_fetch(store)
     assert (outcome["status"], outcome["inserted"], outcome["rejected"]) == ("partial", 2, 1)
     assert "CHECK constraint failed" in outcome["error"]
-    assert len(db.all_job_ids()) == 2
+    assert len(store.job_ids()) == 2
 
 
 @pytest.mark.parametrize("field", ["track", "domain"])
