@@ -1,5 +1,4 @@
 import json
-from contextlib import closing
 
 from fastapi.testclient import TestClient
 
@@ -29,9 +28,9 @@ def test_rank_before_pagination_and_source_filter(settings, store):
 
 
 def test_scraper_liveness_uses_lock_ownership(settings):
-    assert app.scraper_running() is False
+    assert worker.lock_held(settings.lock_path) is False
     with open(settings.lock_path, "w") as lock:
-        assert app.scraper_running() is False
+        assert worker.lock_held(settings.lock_path) is False
         worker.fcntl.flock(lock, worker.fcntl.LOCK_EX | worker.fcntl.LOCK_NB)
-        assert app.scraper_running() is True
-    assert app.scraper_running() is False
+        assert worker.lock_held(settings.lock_path) is True
+    assert worker.lock_held(settings.lock_path) is False

@@ -10,8 +10,6 @@ for _name in [n for n in os.environ if n.startswith("JOBINTEL_")]:
 
 import app  # noqa: E402
 import config  # noqa: E402
-import db  # noqa: E402
-import matcher  # noqa: E402
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex
@@ -81,12 +79,10 @@ def settings(tmp_path, monkeypatch):
         monkeypatch.setenv(name, value)
     current = config.Settings.from_env(env)
     monkeypatch.setattr(config, "SETTINGS", current)
-    monkeypatch.setattr(app, "DB", db.JobDB(current.db_path))
-    monkeypatch.setattr(app, "SETTINGS", current)
-    monkeypatch.setattr(app, "PROFILE_FILE", matcher.ProfileFile(current.profile_path))
+    monkeypatch.setattr(app, "app", app.create_app(current))
     return current
 
 
 @pytest.fixture
 def store(settings):
-    return db.JobDB(settings.db_path)
+    return app.app.state.store

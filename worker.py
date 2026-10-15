@@ -32,6 +32,24 @@ import notify
 import schedule as schedule_mod
 
 
+def lock_held(lock_path) -> bool | None:
+    """Probe the worker's kernel lock; file existence alone is not liveness."""
+    if fcntl is None:
+        return None
+    try:
+        with open(lock_path, "r") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            return False
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
 def _run_step(name: str, fn: Callable) -> dict:
     """Isolate sources and preserve their failure/count information."""
     try:

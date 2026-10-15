@@ -107,3 +107,9 @@ cp .env.example .env
 set -a; . ./.env; set +a
 python app.py
 ```
+
+`app.create_app(settings)` builds an isolated FastAPI app. Its lifespan initializes
+`app.state.store` (`db.JobDB`), and `app.state.profiles` holds the profile file cache.
+Routes delegate persistence to `JobDB`; exhausted busy writes raise `DatabaseBusy`
+and return HTTP 503 with `Retry-After: 1`. Worker liveness uses
+`worker.lock_held(settings.lock_path)`.

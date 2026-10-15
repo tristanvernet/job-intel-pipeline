@@ -23,7 +23,7 @@ def test_cold_start_without_profile_serves_jobs(settings, store):
         assert isinstance(response.json()[0]["match_score"], int)
         assert client.get("/api/jobs/" + response.json()[0]["id"]).status_code == 200
     assert not settings.profile_path.exists()
-    assert app.PROFILE_FILE.current() == matcher.default_profile()
+    assert app.app.state.profiles.current() == matcher.default_profile()
 
 
 def test_corrupt_reload_retains_snapshot_then_recovers(settings, caplog):

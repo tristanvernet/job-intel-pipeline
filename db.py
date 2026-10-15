@@ -3,6 +3,7 @@ import hashlib
 import random
 import time
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 
 from collector_status import JobPayload, RejectedJob
@@ -11,6 +12,29 @@ BUSY_TIMEOUT_MS = 100
 WRITE_ATTEMPTS = 5
 WRITE_BUDGET_SECONDS = 2.0
 SCHEMA_VERSION = 2
+
+
+class DatabaseBusy(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class JobFilters:
+    track: str | None = None
+    domain: str | None = None
+    status: str | None = "new"
+    source: str | None = None
+    search: str | None = None
+
+
+# Columns the list view actually renders; raw_description (KBs per row) is
+# deliberately excluded from the bulk payload. Full rows still come from the
+# per-job endpoints.
+_JOB_LIST_COLS = (
+    "id, company, title, url, location, is_remote, track, term, domain, "
+    "source, date_posted, date_discovered, status, applied_at, summary, "
+    "tailored_bullets"
+)
 
 
 def is_busy(exc: sqlite3.OperationalError) -> bool:
@@ -159,8 +183,10 @@ class JobDB:
                         return operation(conn)  # context commits before returning
             except sqlite3.OperationalError as exc:
                 remaining = deadline - time.monotonic()
-                if not is_busy(exc) or attempt + 1 == WRITE_ATTEMPTS or remaining <= 0:
+                if not is_busy(exc):
                     raise
+                if attempt + 1 == WRITE_ATTEMPTS or remaining <= 0:
+                    raise DatabaseBusy("Database busy; retry shortly") from exc
                 time.sleep(min(0.05 * 2 ** attempt + random.uniform(0, 0.025), remaining))
 
     def init(self):
@@ -189,6 +215,97 @@ class JobDB:
         """
         with closing(self.connect()) as conn:
             return {row[0] for row in conn.execute("SELECT id FROM jobs").fetchall()}
+
+    def list_jobs(self, filters: JobFilters) -> list[dict]:
+        query = f"SELECT {_JOB_LIST_COLS} FROM jobs WHERE 1=1"
+        params = []
+
+        if filters.track and filters.track != "all":
+            query += " AND track = ?"
+            params.append(filters.track)
+        if filters.domain and filters.domain != "all":
+            query += " AND domain = ?"
+            params.append(filters.domain)
+        if filters.status and filters.status != "all":
+            query += " AND status = ?"
+            params.append(filters.status)
+        if filters.source and filters.source != "all":
+            query += " AND source = ?"
+            params.append(filters.source)
+        if filters.search:
+            like = f"%{filters.search.strip()}%"
+            query += " AND (company LIKE ? OR title LIKE ? OR location LIKE ?)"
+            params.extend([like, like, like])
+
+        query += " ORDER BY date_discovered DESC, id ASC"
+
+        with closing(self.connect()) as conn:
+            return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+    def get_job(self, job_id) -> dict | None:
+        with closing(self.connect()) as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row is not None else None
+
+    def stats(self) -> dict:
+        with closing(self.connect()) as conn:
+            def count(where="", args=()):
+                return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
+
+            return {
+                "total": count(),
+                "internship": count(" WHERE track = ?", ("internship",)),
+                "full_time": count(" WHERE track = ?", ("full_time",)),
+                "swe": count(" WHERE domain = ?", ("SWE",)),
+                "systems": count(" WHERE domain = ?", ("Systems",)),
+                "aiml": count(" WHERE domain = ?", ("AI/ML",)),
+                "applied": count(" WHERE status = ?", ("applied",)),
+                "saved": count(" WHERE status = ?", ("saved",)),
+            }
+
+    def funnel(self) -> dict:
+        with closing(self.connect()) as conn:
+            def count(where="", args=()):
+                return conn.execute(f"SELECT COUNT(*) FROM jobs{where}", args).fetchone()[0]
+
+            applied_last_7_days = conn.execute(
+                "SELECT COUNT(*) FROM jobs "
+                "WHERE status = 'applied' "
+                "AND applied_at IS NOT NULL "
+                "AND applied_at >= datetime('now', '-7 days')"
+            ).fetchone()[0]
+
+            return {
+                "inbox": count(" WHERE status = ?", ("new",)),
+                "applied": count(" WHERE status = ?", ("applied",)),
+                "saved": count(" WHERE status = ?", ("saved",)),
+                "archived": count(" WHERE status = ?", ("archived",)),
+                "applied_last_7_days": applied_last_7_days,
+                # Pipeline liveness: newest discovery timestamp across all rows
+                # (NULL when the DB is empty -- the UI renders 'never scraped').
+                "last_scraped": conn.execute(
+                    "SELECT MAX(date_discovered) FROM jobs"
+                ).fetchone()[0],
+            }
+
+    def set_status(self, job_id, status) -> bool:
+        def update(conn):
+            with closing(conn.execute(
+                "UPDATE jobs SET status = ?, "
+                "applied_at = CASE WHEN ? = 'applied' THEN CURRENT_TIMESTAMP ELSE NULL END "
+                "WHERE id = ?", (status, status, job_id),
+            )) as cur:
+                return cur.rowcount != 0
+        return self.write(update)
+
+    def save_prep(self, job_id, summary, bullets_text) -> bool:
+        def update(conn):
+            with closing(conn.execute(
+                "UPDATE jobs SET summary = ?, tailored_bullets = ? WHERE id = ?",
+                (summary, bullets_text, job_id),
+            )) as cur:
+                return cur.rowcount != 0
+        return self.write(update)
 
     def insert_job(self, job_data: JobPayload) -> bool:
         company = str(job_data.get("company") or "").strip()
