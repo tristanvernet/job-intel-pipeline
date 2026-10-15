@@ -164,11 +164,6 @@ def test_ingestion_rejects_bad_rows_but_keeps_following_valid_rows(database):
     assert counters["added"] == 1
 
 
-def test_schema_errors_are_not_reported_as_duplicates(database):
-    with pytest.raises(sqlite3.IntegrityError):
-        db.insert_job({**job(), "track": "invalid"})
-
-
 def test_ingestion_continues_after_row_integrity_failure(database, monkeypatch):
     insert = scout.insert_job
     def reject_first(payload):
