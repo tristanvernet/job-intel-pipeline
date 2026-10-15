@@ -3,8 +3,8 @@ import hashlib
 import random
 import time
 from contextlib import closing
-from typing import Optional, Dict, Any
 
+from collector_status import JobPayload, RejectedJob
 from config import SETTINGS
 
 DB_PATH = SETTINGS.db_path
@@ -189,7 +189,7 @@ def re_clean(text: str) -> str:
     import re
     return re.sub(r"\s+", " ", (text or "").lower().strip())
 
-def insert_job(job_data: Dict[str, Any]) -> bool:
+def insert_job(job_data: JobPayload) -> bool:
     company = str(job_data.get("company") or "").strip()
     if not company or company.lower() == "nan":
         company = "Unknown Company"
@@ -225,7 +225,10 @@ def insert_job(job_data: Dict[str, Any]) -> bool:
                 job_data.get("raw_description", "")
             ))) as cur:
             return cur.rowcount == 1
-    return write_transaction(insert)
+    try:
+        return write_transaction(insert)
+    except sqlite3.IntegrityError as exc:
+        raise RejectedJob(str(exc)) from exc
 
 if __name__ == "__main__":
     init_db()
