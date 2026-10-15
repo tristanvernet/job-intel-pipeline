@@ -397,7 +397,7 @@ def test_build_profile_from_resume(tmp_path):
     out = tmp_path / "profile.json"
     profile = sync_profile.build_profile(
         sync_profile.load_existing_profile(out),
-        resume=sync_profile.extract_text_from_resume(resume),
+        resume_text=sync_profile.extract_text_from_resume(resume),
     )
     assert "python" in profile["languages"]
     assert "java" in profile["languages"]
@@ -509,9 +509,9 @@ def test_build_profile_is_idempotent(tmp_path):
     """Re-syncing the same resume must yield the identical profile."""
     resume = "Python python python FastAPI backend engineer. Docker and SQL."
     profile_path = tmp_path / "profile.json"
-    first = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume=resume)
+    first = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume_text=resume)
     sync_profile.save_profile(first, profile_path)
-    second = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume=resume)
+    second = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume_text=resume)
     assert first == second
 
 
@@ -526,5 +526,5 @@ def test_build_profile_preserves_manual_weights(tmp_path):
          "score_saturation": 4.0},
         profile_path,
     )
-    updated = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume=resume)
+    updated = sync_profile.build_profile(sync_profile.load_existing_profile(profile_path), resume_text=resume)
     assert updated["languages"]["python"] == 1.0

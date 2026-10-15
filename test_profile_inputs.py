@@ -76,7 +76,7 @@ def test_build_profile_is_pure(monkeypatch):
     monkeypatch.setattr(io, "open", no_files)
     monkeypatch.setattr(sync_profile.os, "open", no_files)
     base = {"name": "Me", "languages": {"python": 1.0}, "keywords": {"embedded": 0.9}}
-    profile = sync_profile.build_profile(base, resume="Python and Java backend work with Docker.")
+    profile = sync_profile.build_profile(base, resume_text="Python and Java backend work with Docker.")
     assert base == {"name": "Me", "languages": {"python": 1.0}, "keywords": {"embedded": 0.9}}
     assert profile == {
         "name": "Me",

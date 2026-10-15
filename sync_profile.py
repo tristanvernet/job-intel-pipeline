@@ -298,16 +298,16 @@ def save_profile(profile: Dict[str, Any], path: str | Path) -> None:
 def build_profile(
     base: Dict[str, Any],
     *,
-    resume: Optional[str] = None,
+    resume_text: Optional[str] = None,
     github: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Merge resume text and/or a GitHub username's weights into a copy of `base`."""
-    if not resume and not github:
+    if not resume_text and not github:
         raise ValueError("Provide at least one of --resume or --github.")
 
     profile = base
-    if resume:
-        profile = merge_sections(profile, scan_text_for_tech(resume))
+    if resume_text:
+        profile = merge_sections(profile, scan_text_for_tech(resume_text))
 
     if github:
         profile = merge_sections(profile, fetch_github_profile(github))
@@ -330,8 +330,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     out = args.out or config.SETTINGS.profile_path
     try:
         base = load_existing_profile(out)
-        resume = extract_text_from_resume(args.resume) if args.resume else None
-        profile = build_profile(base, resume=resume, github=args.github)
+        resume_text = extract_text_from_resume(args.resume) if args.resume else None
+        profile = build_profile(base, resume_text=resume_text, github=args.github)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"[sync_profile] Error: {exc}", file=sys.stderr)
         return 1
