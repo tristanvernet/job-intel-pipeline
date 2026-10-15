@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 import pandas as pd
 from pandas.api.types import is_scalar
-from collector_status import JobSink, failure_status, summarize
+from collector_status import JobSink, RejectedJob, failure_status, summarize
 
 from jobspy import scrape_jobs
 from classifier import is_unwanted_role, classify_track, classify_domain
@@ -134,11 +134,16 @@ def _ingest(jobs_df, default_track: str, counters: dict, sink: JobSink):
                 counters["skipped"] += 1
                 continue
             validate_payload(payload)
+        except (ValueError, TypeError) as exc:
+            counters["rejected"] += 1
+            print(f"  Rejected row: {exc}")
+            continue
+        try:
             if sink.insert_job(payload):
                 counters["added"] += 1
             else:
                 counters["duplicates"] += 1
-        except (ValueError, TypeError) as exc:
+        except RejectedJob as exc:
             counters["rejected"] += 1
             print(f"  Rejected row: {exc}")
         # Infrastructure failures (including exhausted BUSY) escape to the

@@ -1,7 +1,7 @@
 import re
 import requests
 import json
-from collector_status import JobSink, failure_status
+from collector_status import JobSink, RejectedJob, failure_status
 from classifier import is_unwanted_role, classify_track, classify_domain
 
 # Raw Markdown source lists for early-career roles
@@ -241,7 +241,7 @@ def run_github_fetch(sink: JobSink):
                     try:
                         if sink.insert_job(payload):
                             outcome["inserted"] += 1
-                    except (ValueError, TypeError) as exc:
+                    except RejectedJob as exc:
                         outcome["rejected"] += 1
                         outcome.update(status="partial", error=str(exc))
         except Exception as exc:
