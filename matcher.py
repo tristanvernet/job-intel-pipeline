@@ -20,9 +20,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from config import Settings
+from config import SETTINGS
 
-PROFILE_PATH = Settings.from_env().profile_path
+PROFILE_PATH = SETTINGS.profile_path
 
 # Sections of the profile that contribute weighted terms, in flatten order.
 _WEIGHTED_SECTIONS = ("languages", "frameworks", "skills", "keywords")

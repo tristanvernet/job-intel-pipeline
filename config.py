@@ -1,9 +1,9 @@
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).parent
 ENV_PREFIX = "JOBINTEL_"
 
 
@@ -13,44 +13,37 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Settings:
-    db_path: Path
-    profile_path: Path
-    schedule_config_path: Path
-    lock_path: Path
+    db_path: Path = ROOT / "jobs.db"
+    profile_path: Path = ROOT / "profile.json"
+    schedule_config_path: Path = ROOT / "schedule_config.json"
+    lock_path: Path = field(default_factory=lambda: Path.home() / ".jobintel.lock")
     host: str = "127.0.0.1"
     port: int = 8000
 
     @classmethod
     def env_names(cls) -> tuple:
-        return tuple(ENV_PREFIX + f.name.upper() for f in fields(cls))
+        return tuple(ENV_PREFIX + name.upper() for name in cls.__dataclass_fields__)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
-        values = {
-            "db_path": ROOT / "jobs.db",
-            "profile_path": ROOT / "profile.json",
-            "schedule_config_path": ROOT / "schedule_config.json",
-            "lock_path": Path.home() / ".jobintel.lock",
-        }
-        for field in fields(cls):
-            name = ENV_PREFIX + field.name.upper()
-            raw = env.get(name, "")
-            if not raw:
-                continue
-            if field.type is Path:
-                values[field.name] = ROOT / Path(raw).expanduser()
-            elif field.type is int:
-                values[field.name] = _port(name, raw)
-            else:
-                values[field.name] = raw
-        return cls(**values)
+        def value(name):
+            return env.get(ENV_PREFIX + name.upper(), "")
+
+        overrides = {}
+        for name in ("db_path", "profile_path", "schedule_config_path", "lock_path"):
+            if value(name):
+                overrides[name] = ROOT / Path(value(name)).expanduser()
+        if value("host"):
+            overrides["host"] = value("host")
+        if value("port"):
+            overrides["port"] = _port(value("port"))
+        return cls(**overrides)
 
 
-def _port(name: str, raw: str) -> int:
-    try:
-        port = int(raw)
-    except ValueError:
-        port = 0
-    if not 1 <= port <= 65535:
-        raise ConfigError(f"{name} must be an integer port in 1..65535, got {raw!r}")
-    return port
+def _port(raw: str) -> int:
+    if not raw.isdigit() or not 1 <= int(raw) <= 65535:
+        raise ConfigError(f"{ENV_PREFIX}PORT must be an integer port in 1..65535, got {raw!r}")
+    return int(raw)
+
+
+SETTINGS = Settings.from_env()

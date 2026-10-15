@@ -5,9 +5,9 @@ import time
 from contextlib import closing
 from typing import Optional, Dict, Any
 
-from config import Settings
+from config import SETTINGS
 
-DB_PATH = Settings.from_env().db_path
+DB_PATH = SETTINGS.db_path
 
 BUSY_TIMEOUT_MS = 100
 WRITE_ATTEMPTS = 5

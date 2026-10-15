@@ -98,6 +98,8 @@ Every setting has a default, so nothing is required. Override one by exporting i
 
 `JOBINTEL_HOST` and `JOBINTEL_PORT` apply to `python app.py`. A bare `uvicorn` command takes its own `--host` and `--port`.
 
+The scheduled worker that `setup_schedule.py` installs runs under launchd, which does not inherit your shell. It always uses the defaults, so keep the database and lock paths at their defaults if you use the scheduler.
+
 Nothing loads `.env` or `.env.example` automatically. Copy the example, edit it, and export it into your shell:
 
 ```bash

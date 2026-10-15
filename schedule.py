@@ -18,9 +18,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from config import Settings
+from config import SETTINGS
 
-CONFIG_PATH = Settings.from_env().schedule_config_path
+CONFIG_PATH = SETTINGS.schedule_config_path
 
 # launchd Weekday: 0 and 7 are both Sunday, 1 = Monday ... 6 = Saturday.
 _WEEKDAYS = {

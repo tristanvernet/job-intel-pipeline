@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 from collector_status import failure_status, summarize
-from config import Settings
+from config import SETTINGS
 import sys
 import time
 from typing import Callable, Dict, Optional
@@ -27,7 +27,7 @@ try:
 except ImportError:  # pragma: no cover - platform guard
     fcntl = None
 
-LOCK_PATH = Settings.from_env().lock_path
+LOCK_PATH = SETTINGS.lock_path
 
 import db
 import notify

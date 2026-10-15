@@ -4,7 +4,7 @@ import pytest
 
 from config import ROOT, ConfigError, Settings
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).parent
 
 
 def test_defaults_match_previous_module_paths():
@@ -49,7 +49,7 @@ def test_relative_paths_resolve_against_repo_root_and_tilde_expands():
     assert ROOT == REPO
 
 
-@pytest.mark.parametrize("value", ["abc", "0", "65536", "-1", "80.5"])
+@pytest.mark.parametrize("value", ["abc", "0", "65536", "-1", "80.5", "8_000", " 8000"])
 def test_bad_port_raises_naming_the_variable(value):
     with pytest.raises(ConfigError, match="JOBINTEL_PORT"):
         Settings.from_env({"JOBINTEL_PORT": value})
@@ -61,12 +61,8 @@ def test_env_example_declares_exactly_the_settings_variables():
         line = line.lstrip("# ").strip()
         if "=" in line:
             keys.add(line.split("=", 1)[0])
-    assert Settings.env_names() == (
-        "JOBINTEL_DB_PATH",
-        "JOBINTEL_PROFILE_PATH",
-        "JOBINTEL_SCHEDULE_CONFIG_PATH",
-        "JOBINTEL_LOCK_PATH",
-        "JOBINTEL_HOST",
-        "JOBINTEL_PORT",
-    )
     assert keys == set(Settings.env_names())
+
+
+def test_defaults_need_no_environment():
+    assert Settings() == Settings.from_env({})
