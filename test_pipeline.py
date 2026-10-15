@@ -658,3 +658,19 @@ def test_build_profile_preserves_manual_weights(tmp_path):
     )
     updated = sync_profile.build_profile(resume=resume, profile_path=profile_path)
     assert updated["languages"]["python"] == 1.0
+
+
+def test_scan_text_for_tech_key_order_ignores_hash_seed():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    code = ("import json, sync_profile; print(json.dumps(sync_profile.scan_text_for_tech("
+            "'Python Java Go Rust SQL with FastAPI Django React Docker Kubernetes. Backend APIs, testing, "
+            "ci/cd, machine learning and cloud. Software engineer, developer, platform, data.')))")
+    outputs = {
+        subprocess.run([sys.executable, "-c", code], env={**os.environ, "PYTHONHASHSEED": seed},
+                       cwd=Path(__file__).parent, capture_output=True, text=True, check=True).stdout
+        for seed in ("1", "2", "3")
+    }
+    assert len(outputs) == 1
