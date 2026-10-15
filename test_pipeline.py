@@ -226,7 +226,6 @@ def client(tmp_path, monkeypatch):
 
     import app as app_module
     importlib.reload(app_module)          # rebind get_connection under patched path
-    monkeypatch.setattr(app_module, "DB_PATH", test_db)
 
     db.init_db()
     db.insert_job({

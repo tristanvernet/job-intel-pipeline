@@ -18,7 +18,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-CONFIG_PATH = Path(__file__).parent / "schedule_config.json"
+from config import Settings
+
+CONFIG_PATH = Settings.from_env().schedule_config_path
 
 # launchd Weekday: 0 and 7 are both Sunday, 1 = Monday ... 6 = Saturday.
 _WEEKDAYS = {

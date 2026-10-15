@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Optional
 
+from config import Settings
 from db import init_db, get_connection, VALID_STATUSES, write_transaction, is_busy
 from prep import get_prep_provider
 from matcher import PROFILE_PATH, default_profile, explain, flatten_terms, load_profile, match_score
@@ -48,7 +49,6 @@ _JOB_LIST_COLS = (
 )
 _JOB_LIST_LIMIT = 500
 
-DB_PATH = Path(__file__).parent / "jobs.db"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
@@ -283,4 +283,6 @@ def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+
+    settings = Settings.from_env()
+    uvicorn.run("app:app", host=settings.host, port=settings.port, reload=True)

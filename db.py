@@ -3,10 +3,11 @@ import hashlib
 import random
 import time
 from contextlib import closing
-from pathlib import Path
 from typing import Optional, Dict, Any
 
-DB_PATH = Path(__file__).parent / "jobs.db"
+from config import Settings
+
+DB_PATH = Settings.from_env().db_path
 
 BUSY_TIMEOUT_MS = 100
 WRITE_ATTEMPTS = 5

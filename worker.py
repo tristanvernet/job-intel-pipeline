@@ -17,9 +17,9 @@ from __future__ import annotations
 import argparse
 import json
 from collector_status import failure_status, summarize
+from config import Settings
 import sys
 import time
-from pathlib import Path
 from typing import Callable, Dict, Optional
 
 try:
@@ -27,7 +27,7 @@ try:
 except ImportError:  # pragma: no cover - platform guard
     fcntl = None
 
-LOCK_PATH = Path.home() / ".jobintel.lock"
+LOCK_PATH = Settings.from_env().lock_path
 
 import db
 import notify
