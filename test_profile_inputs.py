@@ -1,8 +1,11 @@
 """Matching and profile import take their profile input explicitly."""
+import builtins
+import io
 import json
 import os
 
 import matcher
+import sync_profile
 
 PROFILE = {"languages": {"python": 1.0, "java": 0.5}, "skills": {"backend": 1.0}, "score_saturation": 2}
 
@@ -63,3 +66,23 @@ def test_profile_file_reuses_snapshot_until_mtime_changes(tmp_path):
     path.write_text(json.dumps({"languages": {"rust": 3}}), encoding="utf-8")
     os.utime(path, ns=(0, path.stat().st_mtime_ns + 1))
     assert source.current() == {"languages": {"rust": 3}}
+
+
+def test_build_profile_is_pure(monkeypatch):
+    def no_files(*args, **kwargs):
+        raise AssertionError(f"build_profile touched a file: {args[:1]}")
+
+    monkeypatch.setattr(builtins, "open", no_files)
+    monkeypatch.setattr(io, "open", no_files)
+    monkeypatch.setattr(sync_profile.os, "open", no_files)
+    base = {"name": "Me", "languages": {"python": 1.0}, "keywords": {"embedded": 0.9}}
+    profile = sync_profile.build_profile(base, resume="Python and Java backend work with Docker.")
+    assert base == {"name": "Me", "languages": {"python": 1.0}, "keywords": {"embedded": 0.9}}
+    assert profile == {
+        "name": "Me",
+        "languages": {"python": 1.0, "java": 1.0},
+        "keywords": {"embedded": 0.9},
+        "frameworks": {"docker": 1.0},
+        "skills": {"backend": 1.0},
+        "score_saturation": 6.0,
+    }
