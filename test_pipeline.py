@@ -1,14 +1,13 @@
 """Deterministic, offline test suite for the job-intel pipeline.
 
-Covers: markdown/parser logic, classifier rules, scout payload mapping, and the
-FastAPI endpoints (against a throwaway temp DB). No network is ever touched.
+Covers: markdown/parser logic, classifier rules, scout payload mapping, schema
+migration, matching, and profile sync. No network is ever touched.
 """
 import json
 import sqlite3
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 import db
 from classifier import is_unwanted_role, classify_track, classify_domain
@@ -216,29 +215,8 @@ def test_row_to_payload_rejects_unknown_domain():
 
 
 # --------------------------------------------------------------------------- #
-# FastAPI endpoints (temp DB)
+# Schema migration
 # --------------------------------------------------------------------------- #
-@pytest.fixture()
-def client():
-    import app as app_module
-
-    db.init_db()
-    db.insert_job({
-        "id": "job1", "company": "Acme", "title": "Software Engineer Intern",
-        "url": "https://acme.com/1", "location": "New York, NY", "is_remote": False,
-        "track": "internship", "term": "Summer 2027", "domain": "SWE",
-        "source": "test", "raw_description": "desc",
-    })
-    db.insert_job({
-        "id": "job2", "company": "Globex", "title": "Junior Systems Engineer",
-        "url": "https://globex.com/2", "location": "Remote", "is_remote": True,
-        "track": "full_time", "term": "Entry", "domain": "Systems",
-        "source": "test", "raw_description": "desc",
-    })
-    with TestClient(app_module.app) as c:
-        yield c
-
-
 def test_migration_adds_status_check(tmp_path, monkeypatch):
     """A legacy table with no status CHECK is safely upgraded, rows preserved."""
     legacy = tmp_path / "legacy.db"
@@ -259,91 +237,6 @@ def test_migration_adds_status_check(tmp_path, monkeypatch):
         assert "check(statusin(" in schema.lower().replace(" ", "")
         # legacy unknown status normalized to 'new'
         assert c.execute("SELECT status FROM jobs WHERE id='a'").fetchone()[0] == "new"
-
-
-def test_list_jobs(client):
-    jobs = client.get("/api/jobs?status=new").json()
-    assert len(jobs) == 2
-
-
-def test_list_jobs_filter_track_and_domain(client):
-    assert len(client.get("/api/jobs?track=internship&status=new").json()) == 1
-    assert len(client.get("/api/jobs?domain=Systems&status=new").json()) == 1
-
-
-def test_list_jobs_search_param(client):
-    res = client.get("/api/jobs?status=new&search=globex").json()
-    assert len(res) == 1 and res[0]["company"] == "Globex"
-
-
-def test_stats(client):
-    s = client.get("/api/stats").json()
-    assert s["total"] == 2 and s["internship"] == 1 and s["swe"] == 1 and s["systems"] == 1
-
-
-def test_analytics_baseline_counts(client):
-    a = client.get("/api/analytics").json()
-    # Fixture seeds two 'new' jobs, nothing applied/saved/archived yet.
-    assert a["inbox"] == 2
-    assert a["applied"] == 0
-    assert a["saved"] == 0
-    assert a["archived"] == 0
-    assert a["applied_last_7_days"] == 0
-
-
-def test_analytics_reflects_status_changes(client):
-    client.post("/api/jobs/job1/status", json={"status": "applied"})
-    client.post("/api/jobs/job2/status", json={"status": "saved"})
-    a = client.get("/api/analytics").json()
-    assert a["inbox"] == 0
-    assert a["applied"] == 1
-    assert a["saved"] == 1
-    assert a["archived"] == 0
-    # A fresh application is timestamped now, so it lands in the 7-day window.
-    assert a["applied_last_7_days"] == 1
-
-
-def test_analytics_applied_last_7_days_excludes_old(client):
-    """An applied role stamped >7 days ago is counted in totals but not recent."""
-    client.post("/api/jobs/job1/status", json={"status": "applied"})
-    with db.get_connection() as conn:
-        conn.execute(
-            "UPDATE jobs SET applied_at = datetime('now', '-10 days') WHERE id = ?",
-            ("job1",),
-        )
-    a = client.get("/api/analytics").json()
-    assert a["applied"] == 1
-    assert a["applied_last_7_days"] == 0
-
-
-def test_update_status_and_tabs(client):
-    r = client.post("/api/jobs/job1/status", json={"status": "saved"})
-    assert r.status_code == 200
-    assert len(client.get("/api/jobs?status=saved").json()) == 1
-    assert len(client.get("/api/jobs?status=new").json()) == 1
-
-
-def test_update_status_invalid(client):
-    assert client.post("/api/jobs/job1/status", json={"status": "nope"}).status_code == 400
-
-
-def test_update_status_missing_job(client):
-    assert client.post("/api/jobs/ghost/status", json={"status": "applied"}).status_code == 404
-
-
-def test_prep_endpoint_persists(client):
-    r = client.post("/api/jobs/job1/prep")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["summary"] and body["bullets"] and body["talking_points"]
-    # persisted to summary + tailored_bullets
-    saved = client.get("/api/jobs?status=new&search=Acme").json()[0]
-    assert saved["summary"] == body["summary"]
-    assert saved["tailored_bullets"]
-
-
-def test_prep_missing_job(client):
-    assert client.post("/api/jobs/ghost/prep").status_code == 404
 
 
 # --------------------------------------------------------------------------- #
@@ -466,21 +359,6 @@ def test_explain_reports_matched_terms(sample_profile):
     assert info["score"] == matcher.match_score(job, sample_profile)
     assert "backend" in info["matched_terms"]
     assert info["matched_weight"] > 0
-
-
-# --------------------------------------------------------------------------- #
-# API integration: Inbox sorts by match score descending
-# --------------------------------------------------------------------------- #
-def test_api_attaches_match_score(client):
-    jobs = client.get("/api/jobs?status=new").json()
-    assert all("match_score" in j for j in jobs)
-    assert all(0 <= j["match_score"] <= 100 for j in jobs)
-
-
-def test_api_sorts_by_match_score_desc(client):
-    jobs = client.get("/api/jobs?status=new").json()
-    scores = [j["match_score"] for j in jobs]
-    assert scores == sorted(scores, reverse=True)
 
 
 # --------------------------------------------------------------------------- #

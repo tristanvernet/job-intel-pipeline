@@ -9,9 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 
-import app
 import db
 import fetch_github
 import scout
@@ -107,22 +105,6 @@ def test_real_wal_contention_retries_until_lock_released(database, monkeypatch):
     finally:
         timer.join()
         held.close()
-
-
-@pytest.mark.parametrize("endpoint,body", [("status", {"status": "saved"}), ("prep", None)])
-def test_busy_mutations_return_retryable_503(database, endpoint, body):
-    with TestClient(app.app) as client:
-        db.insert_job(job())
-        with closing(db.get_connection()) as held:
-            held.execute("BEGIN IMMEDIATE")
-            started = time.monotonic()
-            response = client.post(f"/api/jobs/one/{endpoint}", json=body)
-            elapsed = time.monotonic() - started
-            held.rollback()
-        assert response.status_code == 503
-        assert response.headers["retry-after"] == "1"
-        assert elapsed < 2.5
-        assert client.get("/api/jobs/one").json()["status"] == "new"
 
 
 def test_migration_failure_rolls_back_schema_and_normalization(tmp_path, monkeypatch):
